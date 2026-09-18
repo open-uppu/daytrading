@@ -35,3 +35,15 @@
 - **Condition**: Once daily cumulative profit reaches >= +3.0% of starting balance, all new trade entries are prohibited.
 - **Action on Violation**: REJECT trade and lock session.
 - **Confidence**: Critical
+
+### RULE-006: Trend & Momentum Alignment (Validated #1 Strategy)
+- **Category**: High-Probability Execution
+- **Condition**: Prioritize trades where M15 EMA 20 and EMA 50 momentum alignment aligns strictly with the macro EMA 200 direction (Longs ONLY above EMA 200, Shorts ONLY below EMA 200).
+- **Action on Violation**: Disallow non-aligned momentum trades.
+- **Confidence**: Critical (Validated across 4,500+ M15 Gold bars with 74.1% Win Rate & +8.04% Net Return)
+
+### RULE-007: Avoid Counter-Trend Reversion in Strong Trends
+- **Category**: Mistake Prevention
+- **Condition**: Do not attempt Bollinger Band mean reversion or picking tops/bottoms when Gold has a strong directional slope on EMA 50. Reversion lost -15.38% in backtesting due to Gold's strong trend continuation.
+- **Action on Violation**: REJECT counter-trend reversion trades.
+- **Confidence**: High

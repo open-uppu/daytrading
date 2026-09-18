@@ -37,19 +37,34 @@ class ConfluenceEngine:
         quant_score = 0
         quant_reasons = []
         
-        # 1. Trend Alignment (Quant)
-        if close_p > ema_20 > ema_50 > ema_200:
-            quant_score += 35
-            quant_reasons.append("Bullish EMA alignment (Price > EMA20 > EMA50 > EMA200)")
-        elif close_p < ema_20 < ema_50 < ema_200:
-            quant_score -= 35
-            quant_reasons.append("Bearish EMA alignment (Price < EMA20 < EMA50 < EMA200)")
-        elif close_p > ema_50 and close_p > ema_200:
-            quant_score += 20
-            quant_reasons.append("Price above EMA50 & EMA200")
-        elif close_p < ema_50 and close_p < ema_200:
-            quant_score -= 20
-            quant_reasons.append("Price below EMA50 & EMA200")
+        # 1. Trend & Momentum Alignment (Quant)
+        # Check EMA 20 / 50 cross if previous bar available
+        prev_row = df_m15_ind.iloc[-2] if len(df_m15_ind) > 1 else latest
+        prev_ema_20 = float(prev_row.get('ema_20', ema_20))
+        prev_ema_50 = float(prev_row.get('ema_50', ema_50))
+        bullish_cross = (prev_ema_20 <= prev_ema_50) and (ema_20 > ema_50)
+        bearish_cross = (prev_ema_20 >= prev_ema_50) and (ema_20 < ema_50)
+
+        if close_p > ema_200:
+            if bullish_cross and 45.0 <= rsi <= 65.0:
+                quant_score += 45
+                quant_reasons.append("VALIDATED WINNER: Bullish EMA 20/50 Cross above EMA 200 with expanding RSI")
+            elif close_p > ema_20 > ema_50:
+                quant_score += 35
+                quant_reasons.append("Bullish EMA alignment (Price > EMA20 > EMA50 > EMA200)")
+            elif close_p > ema_50:
+                quant_score += 20
+                quant_reasons.append("Price above EMA50 & EMA200 uptrend")
+        elif close_p < ema_200:
+            if bearish_cross and 35.0 <= rsi <= 55.0:
+                quant_score -= 45
+                quant_reasons.append("VALIDATED WINNER: Bearish EMA 20/50 Cross below EMA 200 with declining RSI")
+            elif close_p < ema_20 < ema_50:
+                quant_score -= 35
+                quant_reasons.append("Bearish EMA alignment (Price < EMA20 < EMA50 < EMA200)")
+            elif close_p < ema_50:
+                quant_score -= 20
+                quant_reasons.append("Price below EMA50 & EMA200 downtrend")
             
         # Higher Timeframe Confirmation (if provided)
         if df_h1 is not None and len(df_h1) >= 20:

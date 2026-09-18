@@ -104,6 +104,12 @@ def cmd_journal(args):
         console.print(Panel(mistakes_file.read_text(), title="Mistakes Database (journal/mistakes_database.md)", border_style="cyan"))
 
 
+def cmd_backtest(args):
+    """Runs the 5-strategy backtest leaderboard across real Gold historical data."""
+    from backtest.run_comparison import run_all_strategies
+    run_all_strategies(initial_balance=args.balance, save_chart=True)
+
+
 def cmd_bridge(args):
     """Runs the MT4 FastAPI bridge server."""
     import uvicorn
@@ -126,6 +132,10 @@ def main():
     
     # Journal command
     subparsers.add_parser("journal", help="View learned rules and mistakes database")
+
+    # Backtest command
+    bt_parser = subparsers.add_parser("backtest", help="Run multi-strategy backtest on real historical Gold data")
+    bt_parser.add_argument("--balance", type=float, default=10000.0, help="Initial capital in USD")
     
     # Bridge command
     subparsers.add_parser("bridge", help="Run MT4 FastAPI Bridge Server")
@@ -138,6 +148,8 @@ def main():
         cmd_analyze(args)
     elif args.command == "journal":
         cmd_journal(args)
+    elif args.command == "backtest":
+        cmd_backtest(args)
     elif args.command == "bridge":
         cmd_bridge(args)
     else:
