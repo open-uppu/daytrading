@@ -111,10 +111,11 @@ def cmd_backtest(args):
 
 
 def cmd_bridge(args):
-    """Runs the MT4 FastAPI bridge server."""
+    """Runs the MT5 FastAPI bridge server."""
     import uvicorn
-    console.print(f"[bold green]Starting MT4 Bridge Server on {config.mt4_host}:{config.mt4_port}...[/bold green]")
-    uvicorn.run("mt4.bridge_server:app", host=config.mt4_host, port=config.mt4_port, reload=False)
+    console.print(f"[bold green]Starting MT5 Bridge Server on {config.mt5_host}:{config.mt5_port}...[/bold green]")
+    console.print(f"Connected Account: [bold cyan]{config.mt5_login}[/bold cyan] | Server: [bold cyan]{config.mt5_server}[/bold cyan]")
+    uvicorn.run("mt5.bridge_server:app", host=config.mt5_host, port=config.mt5_port, reload=False)
 
 
 def main():
@@ -123,7 +124,7 @@ def main():
     
     # Loop command
     loop_parser = subparsers.add_parser("loop", help="Run autonomous trading loop")
-    loop_parser.add_argument("--mode", default="paper", choices=["paper", "mt4"], help="Broker execution mode")
+    loop_parser.add_argument("--mode", default="mt5", choices=["mt5", "paper", "mt4"], help="Broker execution mode")
     loop_parser.add_argument("--interval", type=int, default=5, help="Loop interval in seconds")
     loop_parser.add_argument("--max-iter", type=int, default=None, help="Stop after N iterations (for testing)")
     
@@ -138,7 +139,7 @@ def main():
     bt_parser.add_argument("--balance", type=float, default=10000.0, help="Initial capital in USD")
     
     # Bridge command
-    subparsers.add_parser("bridge", help="Run MT4 FastAPI Bridge Server")
+    subparsers.add_parser("bridge", help="Run MT5 FastAPI Bridge Server (connects with AgenticMT5Bridge.mq5)")
     
     args = parser.parse_args()
     

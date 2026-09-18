@@ -49,10 +49,18 @@ class TradingConfig(BaseSettings):
     learned_rules_file: Path = BASE_DIR / "journal" / "learned_rules.md"
     mistakes_db_file: Path = BASE_DIR / "journal" / "mistakes_database.md"
     
-    # MT4 Bridge Settings
+    # MT5 Bridge & Account Settings
+    mt5_server: str = os.getenv("MT5_SERVER", "Exness-MT5Trial14")
+    mt5_login: int = int(os.getenv("MT5_LOGIN", "416387559"))
+    mt5_password: str = os.getenv("MT5_PASSWORD", "like_Apple1")
+    mt5_host: str = os.getenv("MT5_HOST", "127.0.0.1")
+    mt5_port: int = int(os.getenv("MT5_PORT", "8000"))
+    mt5_files_dir: str = os.getenv("MT5_FILES_DIR", "")
+    
+    # MT4 Legacy Bridge Settings
     mt4_host: str = "127.0.0.1"
     mt4_port: int = 8000
-    mt4_files_dir: str = ""  # Optional path to MT4 MQL4/Files folder
+    mt4_files_dir: str = ""
     
     # Vision Model Settings
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")

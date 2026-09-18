@@ -72,11 +72,25 @@ python3 -m pytest tests/ -v
 
 ---
 
-## การติดตั้งบน MetaTrader 4 (MT4)
+## การติดตั้งบน MetaTrader 5 (MT5) สำหรับบัญชี Exness
 
-1. คัดลอกไฟล์ `mt4/AgenticMT4Bridge.mq4` ไปวางในโฟลเดอร์ `MQL4/Experts/` ของ MetaTrader 4
-2. เปิดโปรแกรม MetaEditor กด **Compile** (F7)
-3. ใน MT4 ไปที่เมนู **Tools -> Options -> Expert Advisors**:
-   - ติ๊กถูกที่ `Allow automated trading`
+บัญชี Exness ที่ตั้งค่าไว้ในระบบ:
+- **Server**: `Exness-MT5Trial14`
+- **Account (Login)**: `416387559`
+- **Password**: ถูกตั้งค่าไว้ในไฟล์ `.env` แล้ว
+
+### ขั้นตอนการเชื่อมต่อ:
+1. คัดลอกไฟล์ `mt5/AgenticMT5Bridge.mq5` ไปวางในโฟลเดอร์ `MQL5/Experts/` ของ MetaTrader 5
+2. เปิดโปรแกรม MetaEditor 5 แล้วกด **Compile (F7)**
+3. ในโปรแกรม MT5 ไปที่เมนู **Tools -> Options -> Expert Advisors**:
+   - ติ๊กถูกที่ `Allow algorithmic trading`
    - ติ๊กถูกที่ `Allow WebRequest for listed URL` แล้วเพิ่ม URL: `http://127.0.0.1:8000`
-4. ลาก Expert Advisor `AgenticMT4Bridge` ไปใส่บนกราฟทองคำ `XAUUSD` Timeframe `M15`
+4. ลาก Expert Advisor `AgenticMT5Bridge` ไปใส่บนกราฟทองคำ `XAUUSD` Timeframe `M15`
+5. เปิดการทำงานของระบบ Agent:
+   ```bash
+   # เทอร์มินัล 1: เปิด MT5 Bridge Server
+   python3 main.py bridge
+
+   # เทอร์มินัล 2: เริ่ม Agent Loop
+   python3 main.py loop --mode=mt5 --interval=10
+   ```

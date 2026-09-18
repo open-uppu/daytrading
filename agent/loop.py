@@ -14,6 +14,7 @@ from config import config
 from mt4.broker_interface import BaseBroker
 from mt4.paper_broker import PaperTradingBroker
 from mt4.bridge_server import MT4BridgeBroker
+from mt5.bridge_server import MT5BridgeBroker
 from risk.manager import DailySessionTracker, RiskManager
 from core.chart_generator import generate_candlestick_chart
 from core.vision_analyzer import VisionAnalyzer
@@ -40,6 +41,8 @@ class TradingAgent:
         # 1. Initialize Broker
         if broker is not None:
             self.broker = broker
+        elif self.broker_mode == "mt5":
+            self.broker = MT5BridgeBroker()
         elif self.broker_mode == "mt4":
             self.broker = MT4BridgeBroker()
         else:

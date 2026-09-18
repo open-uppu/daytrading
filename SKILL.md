@@ -88,5 +88,5 @@ The agent relies on specialized sub-skills located under `skills/`:
 | **Market Analyzer** | `skills/market_analyzer/SKILL.md` | Quantitative technical analysis, indicators, S/R zones |
 | **Chart Vision** | `skills/chart_vision/SKILL.md` | Candlestick rendering & visual pattern recognition |
 | **Risk Manager** | `skills/risk_manager/SKILL.md` | 3% daily target lock, lot sizing, drawdown controls |
-| **MT4 Bridge** | `skills/mt4_bridge/SKILL.md` | Communication protocol with MetaTrader 4 EA |
+| **MT5 Bridge** | `skills/mt5_bridge/SKILL.md` | Communication protocol with MetaTrader 5 EA (Exness) |
 | **Trade Reflector** | `skills/trade_reflector/SKILL.md` | Post-trade autopsy & Markdown mistake learning |
