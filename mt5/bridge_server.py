@@ -125,16 +125,59 @@ async def receive_bars(payload: BarsPayload):
     return {"status": "BARS_STORED", "count": len(payload.bars)}
 
 
+@app.get("/api/mt5/account")
+async def get_account_state():
+    """Returns live account state for client brokers."""
+    return {
+        "account_number": _mt5_state["account_number"],
+        "server": _mt5_state["server"],
+        "balance": _mt5_state["balance"],
+        "equity": _mt5_state["equity"],
+        "bid": _mt5_state["bid"],
+        "ask": _mt5_state["ask"],
+        "symbol": _mt5_state["symbol"],
+        "connected": _mt5_state["connected"],
+        "open_positions": _mt5_state["open_positions"],
+        "closed_orders": _mt5_state["closed_orders"]
+    }
+
+
+@app.get("/api/mt5/recently_closed")
+async def get_recently_closed():
+    """Returns and clears recently closed orders."""
+    recent = list(_mt5_state["recently_closed"])
+    _mt5_state["recently_closed"].clear()
+    return {"recently_closed": recent}
+
+
+@app.post("/api/mt5/queue_command")
+async def queue_command_endpoint(command: Dict[str, Any]):
+    """Receives commands from external client processes."""
+    _pending_commands.append(command)
+    logger.info(f"[MT5-QUEUE] Queued via REST: {command.get('action')} {command.get('volume')} lots on {command.get('symbol')}")
+    return {"status": "QUEUED", "command_id": command.get("id")}
+
+
 class MT5BridgeBroker(BaseBroker):
     """Python broker adapter communicating with MetaTrader 5."""
 
     def __init__(self, host: str = None, port: int = None):
         self.host = host or config.mt5_host
         self.port = port or config.mt5_port
+        self.base_url = f"http://{self.host}:{self.port}"
         self.cmd_counter = 1
 
     def get_account_info(self) -> Dict[str, Any]:
         """Returns account telemetry reported by MT5 terminal."""
+        try:
+            resp = httpx.get(f"{self.base_url}/api/mt5/account", timeout=3.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                data["open_positions_count"] = len(data.get("open_positions", []))
+                return data
+        except Exception:
+            pass
+
         return {
             "account_number": _mt5_state["account_number"],
             "server": _mt5_state["server"],
@@ -155,7 +198,7 @@ class MT5BridgeBroker(BaseBroker):
             
         # Fallback to local cached historical data from data_loader
         from backtest.data_loader import load_historical_data
-        df = load_historical_data(timeframe=timeframe)
+        df = load_historical_data(symbol=symbol, timeframe=timeframe)
         return df.tail(bars).copy().reset_index(drop=True)
 
     def open_order(
@@ -181,6 +224,14 @@ class MT5BridgeBroker(BaseBroker):
             "tp": tp,
             "comment": comment or f"AgenticMT5_{order_type}"
         }
+        
+        try:
+            resp = httpx.post(f"{self.base_url}/api/mt5/queue_command", json=command, timeout=3.0)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+
         _pending_commands.append(command)
         logger.info(f"[MT5-QUEUE] Queued {order_type} {lots} lots on {symbol} (SL: {sl:.2f}, TP: {tp:.2f})")
         return {"status": "QUEUED", "command_id": cmd_id}
@@ -195,6 +246,14 @@ class MT5BridgeBroker(BaseBroker):
             "action": "ORDER_CLOSE",
             "ticket": ticket
         }
+        
+        try:
+            resp = httpx.post(f"{self.base_url}/api/mt5/queue_command", json=command, timeout=3.0)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+
         _pending_commands.append(command)
         return {"status": "QUEUED", "command_id": cmd_id}
 
@@ -210,16 +269,43 @@ class MT5BridgeBroker(BaseBroker):
             "sl": sl,
             "tp": tp
         }
+        
+        try:
+            resp = httpx.post(f"{self.base_url}/api/mt5/queue_command", json=command, timeout=3.0)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+
         _pending_commands.append(command)
         return {"status": "QUEUED", "command_id": cmd_id}
 
     def get_open_positions(self) -> List[Dict[str, Any]]:
+        try:
+            resp = httpx.get(f"{self.base_url}/api/mt5/account", timeout=3.0)
+            if resp.status_code == 200:
+                return resp.json().get("open_positions", [])
+        except Exception:
+            pass
         return _mt5_state["open_positions"]
 
     def get_closed_orders(self) -> List[Dict[str, Any]]:
+        try:
+            resp = httpx.get(f"{self.base_url}/api/mt5/account", timeout=3.0)
+            if resp.status_code == 200:
+                return resp.json().get("closed_orders", [])
+        except Exception:
+            pass
         return _mt5_state["closed_orders"]
 
     def consume_recently_closed(self) -> List[Dict[str, Any]]:
+        try:
+            resp = httpx.get(f"{self.base_url}/api/mt5/recently_closed", timeout=3.0)
+            if resp.status_code == 200:
+                return resp.json().get("recently_closed", [])
+        except Exception:
+            pass
+
         recent = list(_mt5_state["recently_closed"])
         _mt5_state["recently_closed"].clear()
         return recent

@@ -23,6 +23,9 @@ class VisionAnalyzer:
     def __init__(self):
         self.gemini_key = config.gemini_api_key
         self.openai_key = config.openai_api_key
+        self.ai_base_url = config.ai_base_url
+        self.ai_api_key = config.ai_api_key
+        self.ai_model = config.ai_model
         self.provider = config.vision_provider
         
     def analyze_chart(
@@ -35,6 +38,12 @@ class VisionAnalyzer:
         Executes multimodal analysis on the given chart image and price DataFrame.
         """
         # Determine provider
+        if (self.provider in ["ollama", "minimax", "custom"]) or (self.provider == "auto" and self.ai_api_key):
+            try:
+                return self._analyze_with_ollama(chart_image_path, timeframe)
+            except Exception as e:
+                logger.warning(f"Ollama/Minimax vision failed: {e}. Falling back to next provider.")
+
         if self.provider == "gemini" and self.gemini_key:
             return self._analyze_with_gemini(chart_image_path, timeframe)
         elif self.provider == "openai" and self.openai_key:
@@ -244,3 +253,75 @@ class VisionAnalyzer:
         parsed["engine"] = "openai_vision"
         parsed["chart_image_path"] = str(chart_image_path)
         return parsed
+
+    def _analyze_with_ollama(self, chart_image_path: Path, timeframe: str) -> Dict[str, Any]:
+        """Calls OpenAI-compatible Ollama / Minimax multimodal vision API."""
+        with open(chart_image_path, "rb") as f:
+            image_bytes = f.read()
+        encoded = base64.b64encode(image_bytes).decode("utf-8")
+
+        headers = {
+            "Authorization": f"Bearer {self.ai_api_key}",
+            "Content-Type": "application/json"
+        }
+        prompt = (
+            "You are a professional quantitative and technical intraday trader. "
+            "Analyze this candlestick chart image for key technical patterns, trend bias, and S/R levels. "
+            "Respond strictly in JSON format with fields: "
+            "visual_bias (one of STRONG_BUY, BUY, NEUTRAL_WAIT, SELL, STRONG_SELL), "
+            "vision_score (integer from -100 to 100 where positive is bullish and negative is bearish), "
+            "confidence (integer 0 to 100), "
+            "pattern_detected (short string describing the primary pattern), "
+            "observations (list of string observations describing key price action)."
+        )
+        url = f"{self.ai_base_url.rstrip('/')}/chat/completions"
+        payload = {
+            "model": self.ai_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}
+                    ]
+                }
+            ]
+        }
+        resp = httpx.post(url, headers=headers, json=payload, timeout=35.0)
+        resp.raise_for_status()
+        data = resp.json()
+        raw_text = data['choices'][0]['message']['content']
+
+        clean_text = raw_text.strip()
+        if "```json" in clean_text:
+            clean_text = clean_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in clean_text:
+            clean_text = clean_text.split("```")[1].split("```")[0].strip()
+
+        parsed = json.loads(clean_text)
+        
+        # Normalize observations to list of strings
+        obs = parsed.get("observations", [])
+        if isinstance(obs, dict):
+            parsed["observations"] = [f"{k}: {v}" for k, v in obs.items()]
+        elif isinstance(obs, str):
+            parsed["observations"] = [obs]
+
+        # Normalize visual_bias
+        bias = str(parsed.get("visual_bias", "NEUTRAL_WAIT")).upper()
+        if "STRONG" in bias and "BUY" in bias:
+            bias = "STRONG_BUY"
+        elif "STRONG" in bias and "SELL" in bias:
+            bias = "STRONG_SELL"
+        elif "BUY" in bias or "BULL" in bias:
+            bias = "BUY"
+        elif "SELL" in bias or "BEAR" in bias:
+            bias = "SELL"
+        else:
+            bias = "NEUTRAL_WAIT"
+        parsed["visual_bias"] = bias
+
+        parsed["engine"] = f"ollama_vision_{self.ai_model}"
+        parsed["chart_image_path"] = str(chart_image_path)
+        return parsed
+

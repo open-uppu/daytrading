@@ -42,6 +42,7 @@ class TradingConfig(BaseSettings):
     max_open_positions: int = 1       # Focus on 1 high-probability trade at a time
     
     # Paths
+    project_root: Path = BASE_DIR
     artifacts_dir: Path = BASE_DIR / "artifacts"
     charts_dir: Path = BASE_DIR / "artifacts" / "charts"
     journal_dir: Path = BASE_DIR / "journal"
@@ -65,7 +66,10 @@ class TradingConfig(BaseSettings):
     # Vision Model Settings
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-    vision_provider: str = "auto"  # "gemini", "openai", "heuristic", or "auto"
+    ai_base_url: str = os.getenv("AI_BASE_URL", os.getenv("OPENAI_BASE_URL", "https://ollama.com/v1"))
+    ai_api_key: str = os.getenv("AI_API_KEY", "")
+    ai_model: str = os.getenv("AI_MODEL", "minimax-m3:cloud")
+    vision_provider: str = os.getenv("VISION_PROVIDER", "auto")  # "ollama", "gemini", "openai", "heuristic", or "auto"
 
     model_config = {"env_file": ".env", "extra": "allow"}
 

@@ -215,8 +215,15 @@ class TradeReflector:
 class PreTradeFilter:
     """Evaluates prospective trade orders against the active learned_rules.md rulebook."""
 
-    def __init__(self, learned_rules_file: Path = None):
+    def __init__(
+        self,
+        learned_rules_file: Path = None,
+        enforce_ema_trend: bool = True,
+        strategy_type: str = "trend"
+    ):
         self.learned_rules_file = learned_rules_file or config.learned_rules_file
+        self.enforce_ema_trend = enforce_ema_trend
+        self.strategy_type = strategy_type
 
     def evaluate_proposal(
         self,
@@ -231,11 +238,12 @@ class PreTradeFilter:
         Validates setup against learned rules before allowing trade dispatch.
         Returns: (passed: bool, reason: str)
         """
-        # 1. Rule Check: Respect HTF Trend (EMA 200)
-        if action == "BUY" and entry_price < ema_200:
-            return False, f"RULE_VIOLATION [RULE-001]: Cannot BUY below EMA 200 ({entry_price:.2f} < {ema_200:.2f})"
-        if action == "SELL" and entry_price > ema_200:
-            return False, f"RULE_VIOLATION [RULE-001]: Cannot SELL above EMA 200 ({entry_price:.2f} > {ema_200:.2f})"
+        # 1. Rule Check: Respect HTF Trend (EMA 200) for trend strategies
+        if self.enforce_ema_trend and self.strategy_type == "trend":
+            if action == "BUY" and entry_price < ema_200:
+                return False, f"RULE_VIOLATION [RULE-001]: Cannot BUY below EMA 200 ({entry_price:.2f} < {ema_200:.2f})"
+            if action == "SELL" and entry_price > ema_200:
+                return False, f"RULE_VIOLATION [RULE-001]: Cannot SELL above EMA 200 ({entry_price:.2f} > {ema_200:.2f})"
 
         # 2. Rule Check: Key S/R Proximity
         if nearest_sr is not None:
@@ -252,3 +260,4 @@ class PreTradeFilter:
             return False, f"RULE_VIOLATION [RULE-004]: SL buffer too tight ({sl_dist:.2f} < 1.2 * ATR {1.2*atr:.2f})"
 
         return True, "Passed all pre-trade learned rules checks"
+

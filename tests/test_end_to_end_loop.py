@@ -72,6 +72,9 @@ def test_end_to_end_trading_and_3_pct_target_lock(tmp_path):
     agent.reflector.trades_dir = tmp_path / "trades"
     agent.reflector.trades_dir.mkdir(parents=True, exist_ok=True)
     
+    # Use deterministic heuristic vision for unit test
+    agent.vision_analyzer.provider = "heuristic"
+
     # Lower threshold to 40.0 to trigger on synthetic test setup
     agent.confluence_engine.threshold = 40.0
     

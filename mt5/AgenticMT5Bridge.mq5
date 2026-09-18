@@ -55,6 +55,22 @@ void OnTimer()
 {
    SendTelemetry();
    PollCommands();
+   CheckFileCommands();
+}
+
+//+------------------------------------------------------------------+
+//| Tick event function (fires on every price movement)              |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   static datetime lastTickRun = 0;
+   if(TimeCurrent() - lastTickRun >= 1)
+   {
+      lastTickRun = TimeCurrent();
+      SendTelemetry();
+      PollCommands();
+      CheckFileCommands();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -162,6 +178,40 @@ void PollCommands()
    {
       string responseText = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
       ExecuteCommand(responseText);
+   }
+   else if(res == -1)
+   {
+      static datetime lastErrLog = 0;
+      if(TimeCurrent() - lastErrLog >= 15)
+      {
+         lastErrLog = TimeCurrent();
+         int err = GetLastError();
+         Print("[AgenticMT5] WebRequest returned error ", err, " - Please check Tools -> Options -> Expert Advisors -> WebRequest");
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check for commands placed via file pipe                          |
+//+------------------------------------------------------------------+
+void CheckFileCommands()
+{
+   if(FileIsExist("agentic_mt5_commands.json"))
+   {
+      int handle = FileOpen("agentic_mt5_commands.json", FILE_READ | FILE_TXT | FILE_ANSI);
+      if(handle != INVALID_HANDLE)
+      {
+         string json = "";
+         while(!FileIsEnding(handle))
+         {
+            json += FileReadString(handle);
+         }
+         FileClose(handle);
+         FileDelete("agentic_mt5_commands.json");
+         
+         Print("[AgenticMT5] [FILE-PIPE] Received command from file: ", json);
+         ExecuteCommand(json);
+      }
    }
 }
 

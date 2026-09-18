@@ -115,12 +115,22 @@ class DailySessionTracker:
 class RiskManager:
     """Manages position sizing, Stop-Loss, Take-Profit, and trade validation."""
 
-    def __init__(self, session_tracker: DailySessionTracker = None):
+    def __init__(
+        self,
+        session_tracker: DailySessionTracker = None,
+        contract_size: Optional[float] = None,
+        min_lot: Optional[float] = None,
+        max_lot: Optional[float] = None,
+        min_sl_dist: Optional[float] = None
+    ):
         self.session_tracker = session_tracker or DailySessionTracker(config.initial_balance)
         self.risk_pct = config.risk_per_trade_pct
         self.min_rr = config.min_rr_ratio
         self.target_rr = config.target_rr_ratio
-        self.contract_size = config.contract_size
+        self.contract_size = contract_size if contract_size is not None else config.contract_size
+        self.min_lot = min_lot if min_lot is not None else config.min_lot
+        self.max_lot = max_lot if max_lot is not None else config.max_lot
+        self.min_sl_dist = min_sl_dist if min_sl_dist is not None else 2.0
 
     def calculate_lot_size(
         self,
@@ -129,12 +139,12 @@ class RiskManager:
         sl_price: float
     ) -> float:
         """
-        Calculates exact lot size for Gold (XAUUSD) based on risk percentage and stop-loss distance.
-        1 standard lot = 100 oz ($1.00 move = $100 per lot).
+        Calculates exact lot size based on risk percentage and stop-loss distance.
+        Formula: Lot = (Equity * Risk%) / (SL_Distance * Contract_Size)
         """
         sl_distance = abs(entry_price - sl_price)
-        if sl_distance <= 0.1:
-            raise ValueError(f"Stop loss distance too small: {sl_distance:.2f}")
+        if sl_distance <= 0.001:
+            raise ValueError(f"Stop loss distance too small: {sl_distance:.4f}")
 
         # Maximum cash risk on this trade
         risk_cash = equity * self.risk_pct
@@ -145,7 +155,7 @@ class RiskManager:
         raw_lot = risk_cash / loss_per_lot
         
         # Apply broker min/max bounds and 2 decimal precision
-        lot_size = round(max(config.min_lot, min(config.max_lot, raw_lot)), 2)
+        lot_size = round(max(self.min_lot, min(self.max_lot, raw_lot)), 2)
         return lot_size
 
     def compute_sl_tp(
@@ -159,7 +169,7 @@ class RiskManager:
         Computes dynamic ATR-based SL and TP ensuring minimum 1:1.5 to 1:2.0 Risk-Reward.
         Returns: (sl_price, tp_price, rr_ratio)
         """
-        atr_sl_dist = max(round(1.5 * atr, 2), 2.0)  # Minimum 2 dollars for gold
+        atr_sl_dist = max(round(1.5 * atr, 2), self.min_sl_dist)
         
         if action == "BUY":
             sl_price = round(entry_price - atr_sl_dist, 2)

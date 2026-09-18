@@ -92,5 +92,31 @@ python3 -m pytest tests/ -v
    python3 main.py bridge
 
    # เทอร์มินัล 2: เริ่ม Agent Loop
-   python3 main.py loop --mode=mt5 --interval=10
+   python3 main.py run --agent=all --mode=mt5 --interval=15
    ```
+
+---
+
+## การใช้งานผ่าน Docker & Docker Compose
+
+ระบบรองรับการรันผ่าน Docker เต็มรูปแบบ โดยมีการผูก Volume เพื่อให้ `journal/`, `artifacts/`, และ `data/` บันทึกอยู่บนเครื่องจริงเสมอ
+
+### 1. รันระบบเชื่อมต่อ MetaTrader 5 ด้วย Docker:
+```bash
+# สั่ง Build และรันทั้ง Bridge Server และ Squad Agent ในพื้นหลัง
+docker compose up -d
+
+# ดูบันทึกการทำงานและ Dashboard แบบ Real-time
+docker compose logs -f squad
+```
+
+### 2. รันโหมด Paper Trading ด้วย Docker (ไม่ต้องเปิด MT5):
+```bash
+docker compose --profile paper run --rm paper
+```
+
+### 3. หยุดการทำงานของ Docker:
+```bash
+docker compose down
+```
+

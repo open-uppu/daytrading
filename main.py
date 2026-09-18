@@ -1,5 +1,7 @@
 """
-Agentic Gold (XAUUSD) Day Trading System - Main Entry Point.
+Agentic Multi-Asset (Gold, Bitcoin, Ethereum) Day Trading System - Main Entry Point.
+Orchestrates Specialist Agents (GoldSpecialistAgent, BtcSpecialistAgent, EthSpecialistAgent)
+and the SquadManager with Portfolio 3% Daily Profit Protection.
 """
 
 import sys
@@ -8,11 +10,13 @@ import logging
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.text import Text
 from pathlib import Path
 
 from config import config
-from agent.loop import TradingAgent
+from agents.squad_manager import SquadManager
+from agents.gold_agent import GoldSpecialistAgent
+from agents.btc_agent import BtcSpecialistAgent
+from agents.eth_agent import EthSpecialistAgent
 from mt4.paper_broker import PaperTradingBroker
 from core.chart_generator import generate_candlestick_chart
 from core.vision_analyzer import VisionAnalyzer
@@ -27,14 +31,15 @@ console = Console()
 
 
 def cmd_analyze(args):
-    """Performs a single-pass multimodal market analysis."""
-    console.print("\n[bold gold1]=== Gold (XAUUSD) Multimodal Market Analysis ===[/bold gold1]\n")
+    """Performs a single-pass multimodal market analysis for a given asset."""
+    symbol = "XAUUSD" if args.symbol.upper() in ["GOLD", "XAUUSD"] else args.symbol.upper()
+    console.print(f"\n[bold gold1]=== {symbol} Multimodal Market Analysis ===[/bold gold1]\n")
     
     broker = PaperTradingBroker()
-    df = broker.get_market_data(symbol="XAUUSD", timeframe="M15", bars=60)
+    df = broker.get_market_data(symbol=symbol, timeframe="M15", bars=60)
     
     console.print(f"[cyan]1. Generating M15 Candlestick Chart with Indicators...[/cyan]")
-    chart_path = generate_candlestick_chart(df, timeframe="M15", symbol="XAUUSD")
+    chart_path = generate_candlestick_chart(df, timeframe="M15", symbol=symbol)
     console.print(f"   Saved to: [green]{chart_path}[/green]")
     
     console.print(f"[cyan]2. Running Multimodal Chart Vision Analysis...[/cyan]")
@@ -46,11 +51,11 @@ def cmd_analyze(args):
     decision = confluence.evaluate(df, vision_result)
     
     # Render Result Table
-    table = Table(title="Market Confluence Assessment", show_header=True, header_style="bold magenta")
+    table = Table(title=f"{symbol} Market Confluence Assessment", show_header=True, header_style="bold magenta")
     table.add_column("Metric", style="dim", width=25)
     table.add_column("Value", style="bold")
     
-    table.add_row("Current Gold Price", f"${decision['current_price']:.2f}")
+    table.add_row("Current Price", f"${decision['current_price']:.2f}")
     table.add_row("RSI (14)", f"{decision['rsi']:.1f}")
     table.add_row("ATR (14)", f"${decision['atr']:.2f}")
     table.add_row("Vision Engine", str(vision_result.get('engine')))
@@ -73,41 +78,81 @@ def cmd_analyze(args):
 
 
 def cmd_loop(args):
-    """Runs the continuous autonomous trading loop."""
+    """Runs the autonomous trading loop with the Multi-Asset Specialist Squad or single agent."""
+    agents_map = {
+        "all": ["gold", "btc", "eth"],
+        "gold": ["gold"],
+        "btc": ["btc"],
+        "eth": ["eth"]
+    }
+    selected_agents = agents_map.get(args.agent.lower(), ["gold", "btc", "eth"])
+    
     console.print(Panel(
-        f"[bold gold1]Starting Agentic Gold Day Trading Loop[/bold gold1]\n"
-        f"Symbol: [bold]XAUUSD[/bold] | Daily Target: [bold green]3.0%[/bold green] (Min $300 on $10k)\n"
-        f"Broker Mode: [bold cyan]{args.mode}[/bold cyan] | Poll Interval: [bold]{args.interval}s[/bold]",
+        f"[bold cyan]Agentic Multi-Asset Specialist Squad[/bold cyan]\n"
+        f"Active Specialists: [bold yellow]{', '.join([a.upper() for a in selected_agents])}[/bold yellow]\n"
+        f"Daily Profit Target: [bold green]+3.0%[/bold green] (Lock on achievement) | Loss Cutoff: [bold red]-2.0%[/bold red]\n"
+        f"Broker Mode: [bold]{args.mode}[/bold] | Interval: [bold]{args.interval}s[/bold]",
         expand=False
     ))
     
-    agent = TradingAgent(
+    squad = SquadManager(
         broker_mode=args.mode,
-        poll_interval=args.interval
+        initial_balance=args.balance,
+        agents_to_enable=selected_agents
     )
     
-    agent.run_loop(max_iterations=args.max_iter)
+    squad.run_loop(max_iterations=args.max_iter, interval_sec=args.interval)
 
 
 def cmd_journal(args):
-    """Displays learned rules, mistake stats, and journal overview."""
-    console.print("\n[bold gold1]=== Agentic Self-Learning Journal & Rulebook ===[/bold gold1]\n")
+    """Displays learned rules and mistake logs for specified asset or all assets."""
+    assets = ["xauusd", "btcusd", "ethusd"] if args.asset.lower() == "all" else [args.asset.lower()]
     
-    rules_file = config.learned_rules_file
-    if rules_file.exists():
-        console.print(Panel(rules_file.read_text(), title="Active Learned Rules (journal/learned_rules.md)", border_style="green"))
-    else:
-        console.print("[yellow]No learned_rules.md found yet.[/yellow]")
+    console.print("\n[bold gold1]=== Specialist Agent Learned Rulebooks & Autopsy Databases ===[/bold gold1]\n")
+    
+    for asset in assets:
+        asset_dir = config.project_root / "journal" / asset
+        rules_file = asset_dir / "learned_rules.md"
+        mistakes_file = asset_dir / "mistakes_database.md"
         
-    mistakes_file = config.mistakes_db_file
-    if mistakes_file.exists():
-        console.print(Panel(mistakes_file.read_text(), title="Mistakes Database (journal/mistakes_database.md)", border_style="cyan"))
+        console.print(f"\n[bold cyan]------------------ {asset.upper()} Specialist Journal ------------------[/bold cyan]")
+        if rules_file.exists():
+            console.print(Panel(rules_file.read_text(), title=f"{asset.upper()} Learned Rules ({rules_file.name})", border_style="green"))
+        else:
+            console.print(f"[yellow]No learned rules found for {asset.upper()}[/yellow]")
+            
+        if mistakes_file.exists():
+            console.print(Panel(mistakes_file.read_text(), title=f"{asset.upper()} Mistakes Log ({mistakes_file.name})", border_style="cyan"))
 
 
 def cmd_backtest(args):
-    """Runs the 5-strategy backtest leaderboard across real Gold historical data."""
-    from backtest.run_comparison import run_all_strategies
-    run_all_strategies(initial_balance=args.balance, save_chart=True)
+    """Runs backtesting across single asset or full cross-market multi-asset comparison."""
+    market = args.market.lower()
+    
+    if market == "all":
+        from backtest.run_cross_market_comparison import run_cross_market_study
+        console.print("[bold cyan]Starting Full Cross-Market Research Study (Gold, BTC, ETH)...[/bold cyan]")
+        run_cross_market_study(initial_balance=args.balance)
+    elif market in ["gold", "xauusd"]:
+        from backtest.run_comparison import run_all_strategies
+        console.print("[bold gold1]Running Gold (XAUUSD) Strategy Comparison...[/bold gold1]")
+        run_all_strategies(initial_balance=args.balance, save_chart=True)
+    else:
+        from backtest.run_cross_market_comparison import evaluate_market_strategies
+        symbol = "BTCUSD" if market in ["btc", "btcusd"] else "ETHUSD"
+        console.print(f"[bold cyan]Running {symbol} Strategy Comparison...[/bold cyan]")
+        res = evaluate_market_strategies(symbol=symbol, initial_balance=args.balance)
+        win = res["winner"]
+        console.print(Panel(
+            f"[bold green]Winner for {symbol}: {win['strategy_name']}[/bold green]\n"
+            f"Total Return: [bold]{win['total_return_pct']:+.2f}%[/bold]\n"
+            f"Win Rate: [bold]{win['win_rate_pct']:.1f}%[/bold]\n"
+            f"Profit Factor: [bold]{win['profit_factor']:.2f}[/bold]\n"
+            f"Max Drawdown: [bold]{win['max_drawdown_pct']:.2f}%[/bold]\n"
+            f"Days Hit 3% Target: [bold]{win['days_hit_3pct_target']} days[/bold]",
+            title=f"Optimal Strategy for {symbol}",
+            border_style="green"
+        ))
 
 
 def cmd_bridge(args):
@@ -119,23 +164,29 @@ def cmd_bridge(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Agentic Gold (XAUUSD) Day Trading System")
+    parser = argparse.ArgumentParser(description="Agentic Multi-Asset (Gold, BTC, ETH) Day Trading System")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
-    # Loop command
-    loop_parser = subparsers.add_parser("loop", help="Run autonomous trading loop")
-    loop_parser.add_argument("--mode", default="mt5", choices=["mt5", "paper", "mt4"], help="Broker execution mode")
-    loop_parser.add_argument("--interval", type=int, default=5, help="Loop interval in seconds")
-    loop_parser.add_argument("--max-iter", type=int, default=None, help="Stop after N iterations (for testing)")
+    # Loop / Run command
+    for cmd_alias in ["loop", "run"]:
+        loop_parser = subparsers.add_parser(cmd_alias, help="Run autonomous trading loop (squad or specialist)")
+        loop_parser.add_argument("--agent", default="all", choices=["all", "gold", "btc", "eth"], help="Specialist agent to run")
+        loop_parser.add_argument("--mode", default="mt5", choices=["mt5", "paper", "mt4"], help="Broker execution mode")
+        loop_parser.add_argument("--balance", type=float, default=10000.0, help="Initial account balance")
+        loop_parser.add_argument("--interval", type=int, default=5, help="Loop interval in seconds")
+        loop_parser.add_argument("--max-iter", type=int, default=None, help="Stop after N iterations (for testing)")
     
     # Analyze command
-    subparsers.add_parser("analyze", help="Perform single-pass multimodal analysis")
+    ana_parser = subparsers.add_parser("analyze", help="Perform single-pass multimodal analysis")
+    ana_parser.add_argument("--symbol", default="XAUUSD", help="Symbol to analyze (e.g. XAUUSD, BTCUSD, ETHUSD)")
     
     # Journal command
-    subparsers.add_parser("journal", help="View learned rules and mistakes database")
+    jnl_parser = subparsers.add_parser("journal", help="View learned rules and mistakes database")
+    jnl_parser.add_argument("--asset", default="all", choices=["all", "xauusd", "btcusd", "ethusd", "gold", "btc", "eth"], help="Asset journal to view")
 
     # Backtest command
-    bt_parser = subparsers.add_parser("backtest", help="Run multi-strategy backtest on real historical Gold data")
+    bt_parser = subparsers.add_parser("backtest", help="Run strategy backtests and comparative leaderboards")
+    bt_parser.add_argument("--market", default="all", choices=["all", "gold", "btc", "eth", "xauusd", "btcusd", "ethusd"], help="Market to test")
     bt_parser.add_argument("--balance", type=float, default=10000.0, help="Initial capital in USD")
     
     # Bridge command
@@ -143,7 +194,7 @@ def main():
     
     args = parser.parse_args()
     
-    if args.command == "loop":
+    if args.command in ["loop", "run"]:
         cmd_loop(args)
     elif args.command == "analyze":
         cmd_analyze(args)

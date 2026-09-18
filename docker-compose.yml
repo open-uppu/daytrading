@@ -1,0 +1,48 @@
+services:
+  # 1. MT5 FastAPI Bridge Server (Exposes port 8000 to MetaTrader 5)
+  bridge:
+    build: .
+    container_name: agentic_mt5_bridge
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - MT5_HOST=0.0.0.0
+      - MT5_PORT=8000
+    volumes:
+      - ./journal:/app/journal
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+    command: ["python3", "main.py", "bridge"]
+
+  # 2. Multi-Asset Specialist Squad Agent (Gold, BTC, ETH)
+  squad:
+    build: .
+    container_name: agentic_squad_agent
+    restart: unless-stopped
+    depends_on:
+      - bridge
+    env_file:
+      - .env
+    environment:
+      - MT5_HOST=bridge
+      - MT5_PORT=8000
+      - BROKER_MODE=mt5
+    volumes:
+      - ./journal:/app/journal
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+    command: ["python3", "main.py", "run", "--agent=all", "--mode=mt5", "--interval=15"]
+
+  # 3. Standalone Paper Trading (No MT5 needed, runs autonomous simulation)
+  paper:
+    build: .
+    container_name: agentic_paper_squad
+    profiles: ["paper"]
+    volumes:
+      - ./journal:/app/journal
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+    command: ["python3", "main.py", "run", "--agent=all", "--mode=paper", "--interval=10"]
