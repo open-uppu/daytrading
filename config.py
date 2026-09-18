@@ -1,0 +1,70 @@
+"""
+Configuration for Agentic Gold (XAUUSD) Day Trading System
+"""
+
+import os
+from pathlib import Path
+from pydantic_settings import BaseSettings
+
+BASE_DIR = Path(__file__).resolve().parent
+
+class TradingConfig(BaseSettings):
+    # Trading Symbol & Broker
+    symbol: str = "XAUUSD"
+    broker_mode: str = "paper"  # "paper" or "mt4"
+    
+    # Financial & Risk Parameters
+    initial_balance: float = 10000.0
+    daily_target_pct: float = 0.03   # 3% target per day ($300 on $10,000)
+    daily_max_loss_pct: float = 0.02 # 2% max daily loss cutoff ($200 on $10,000)
+    risk_per_trade_pct: float = 0.01  # 1% per trade
+    min_rr_ratio: float = 1.5        # Minimum 1:1.5 Risk-to-Reward ratio
+    target_rr_ratio: float = 2.0     # Preferred 1:2.0 Risk-to-Reward ratio
+    
+    # Gold specific contract details
+    contract_size: float = 100.0     # 1 standard lot = 100 oz
+    min_lot: float = 0.01
+    max_lot: float = 5.0
+    spread_points: float = 0.25      # 25 cents spread ($25 on 1 lot)
+    
+    # Technical Analysis Parameters
+    timeframe_main: str = "M15"
+    timeframe_htf: str = "H1"
+    ema_fast: int = 20
+    ema_medium: int = 50
+    ema_slow: int = 200
+    atr_period: int = 14
+    rsi_period: int = 14
+    confluence_threshold: float = 75.0  # Confluence score >= 75 required for entry
+    
+    # Loop & Observation settings
+    loop_interval_sec: int = 30       # Poll every 30 seconds
+    max_open_positions: int = 1       # Focus on 1 high-probability trade at a time
+    
+    # Paths
+    artifacts_dir: Path = BASE_DIR / "artifacts"
+    charts_dir: Path = BASE_DIR / "artifacts" / "charts"
+    journal_dir: Path = BASE_DIR / "journal"
+    trades_dir: Path = BASE_DIR / "journal" / "trades"
+    learned_rules_file: Path = BASE_DIR / "journal" / "learned_rules.md"
+    mistakes_db_file: Path = BASE_DIR / "journal" / "mistakes_database.md"
+    
+    # MT4 Bridge Settings
+    mt4_host: str = "127.0.0.1"
+    mt4_port: int = 8000
+    mt4_files_dir: str = ""  # Optional path to MT4 MQL4/Files folder
+    
+    # Vision Model Settings
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    vision_provider: str = "auto"  # "gemini", "openai", "heuristic", or "auto"
+
+    model_config = {"env_file": ".env", "extra": "allow"}
+
+config = TradingConfig()
+
+# Ensure directories exist
+config.artifacts_dir.mkdir(parents=True, exist_ok=True)
+config.charts_dir.mkdir(parents=True, exist_ok=True)
+config.journal_dir.mkdir(parents=True, exist_ok=True)
+config.trades_dir.mkdir(parents=True, exist_ok=True)
