@@ -307,16 +307,56 @@ class BaseSpecialistAgent(ABC):
             }
 
         # 10. Execute Order via Broker
-        order_res = self.broker.open_order(
-            symbol=self.symbol,
-            order_type=action,
-            lots=lot_size,
-            sl=sl_candidate,
-            tp=tp_candidate,
-            comment=f"{self.symbol}_{self.strategy_name[:8]}"
-        )
+        # A broker that cannot deliver the command now raises instead of
+        # pretending success, so failures surface as BROKER_ERROR rather than
+        # a phantom ORDER_PLACED.
+        try:
+            order_res = self.broker.open_order(
+                symbol=self.symbol,
+                order_type=action,
+                lots=lot_size,
+                sl=sl_candidate,
+                tp=tp_candidate,
+                comment=f"{self.symbol}_{self.strategy_name[:8]}"
+            )
+        except Exception as e:
+            logger.error(
+                f"{prefix} ORDER DELIVERY FAILED for {action} {lot_size} lots "
+                f"{self.symbol}: {type(e).__name__}: {e}"
+            )
+            return {
+                "symbol": self.symbol,
+                "asset": self.asset_name,
+                "iteration": self.iteration_count,
+                "status": "BROKER_ERROR",
+                "reason": f"{type(e).__name__}: {e}",
+                "session_summary": summary
+            }
 
-        logger.info(f"{prefix} ORDER EXECUTED: {action} {lot_size} lots {self.symbol} @ {current_price:.2f} (SL: {sl_candidate}, TP: {tp_candidate})")
+        # A live bridge can queue a command but never hear back from the EA.
+        # Report that honestly instead of claiming the order is working.
+        if order_res.get("confirmed") is False:
+            logger.warning(
+                f"{prefix} ORDER UNCONFIRMED: {action} {lot_size} lots {self.symbol} "
+                f"queued as {order_res.get('command_id')} but the EA did not confirm. "
+                f"Is the EA attached to a chart and WebRequest allowed?"
+            )
+            return {
+                "symbol": self.symbol,
+                "asset": self.asset_name,
+                "iteration": self.iteration_count,
+                "status": "ORDER_UNCONFIRMED",
+                "order": order_res,
+                "strategy": self.strategy_name,
+                "session_summary": summary
+            }
+
+        logger.info(
+            f"{prefix} ORDER PLACED: {action} {lot_size} lots {self.symbol} @ {current_price:.2f} "
+            f"(SL: {sl_candidate}, TP: {tp_candidate}"
+            + (f", ticket: #{order_res.get('ticket')}" if order_res.get("ticket") else "")
+            + ")"
+        )
         return {
             "symbol": self.symbol,
             "asset": self.asset_name,

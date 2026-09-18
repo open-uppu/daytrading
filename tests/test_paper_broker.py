@@ -68,15 +68,17 @@ def test_mt4_bridge_api():
     assert resp.status_code == 200
     assert resp.json()["status"] == "ACK"
     
-    # 2. Broker adapter queues command
-    broker = MT4BridgeBroker()
+    # 2. Broker adapter queues command (in_process: the TestClient app runs in
+    #    this same process, so the module-level queue is reachable)
+    broker = MT4BridgeBroker(in_process=True)
     queue_res = broker.open_order(
         symbol="XAUUSD",
         order_type="BUY",
         lots=0.3,
         sl=2645.0,
         tp=2670.0,
-        comment="AgenticTest"
+        comment="AgenticTest",
+        await_confirm=False
     )
     assert queue_res["status"] == "QUEUED"
     

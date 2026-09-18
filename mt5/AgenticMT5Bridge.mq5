@@ -90,7 +90,9 @@ void SendTelemetry()
    json += "\"bid\":" + DoubleToString(bid, 2) + ",";
    json += "\"ask\":" + DoubleToString(ask, 2) + ",";
    
-   // Collect Open Positions
+   // Collect Open Positions for every symbol this bridge instance owns.
+   // Filtering by the chart's Symbol() would hide positions on the other two
+   // instruments the squad trades (XAUUSD/BTCUSD/ETHUSD).
    json += "\"open_positions\":[";
    int total = PositionsTotal();
    bool first = true;
@@ -99,7 +101,7 @@ void SendTelemetry()
       ulong ticket = PositionGetTicket(i);
       if(ticket > 0 && g_pos.SelectByTicket(ticket))
       {
-         if(g_pos.Symbol() == Symbol() && g_pos.Magic() == InpMagicNumber)
+         if(g_pos.Magic() == InpMagicNumber)
          {
             if(!first) json += ",";
             first = false;
@@ -112,32 +114,40 @@ void SendTelemetry()
             json += "\"open_price\":" + DoubleToString(g_pos.PriceOpen(), 2) + ",";
             json += "\"sl\":" + DoubleToString(g_pos.StopLoss(), 2) + ",";
             json += "\"tp\":" + DoubleToString(g_pos.TakeProfit(), 2) + ",";
-            json += "\"profit\":" + DoubleToString(g_pos.Profit(), 2);
+            json += "\"profit\":" + DoubleToString(g_pos.Profit(), 2) + ",";
+            // Include per-symbol prices so the bridge can serve quotes for
+            // symbols other than the one this EA is charted on.
+            json += "\"bid\":" + DoubleToString(SymbolInfoDouble(g_pos.Symbol(), SYMBOL_BID), 2) + ",";
+            json += "\"ask\":" + DoubleToString(SymbolInfoDouble(g_pos.Symbol(), SYMBOL_ASK), 2);
             json += "}";
          }
       }
    }
    json += "],";
 
-   // Collect Closed Deals from Today
+   // Collect Closed Deals from Today (all symbols owned by this EA)
    json += "\"closed_orders\":[";
    datetime from = TimeCurrent() - 86400;
    HistorySelect(from, TimeCurrent());
    int dealsTotal = HistoryDealsTotal();
    bool firstDeal = true;
-   for(int d = dealsTotal - 1; d >= 0 && d >= dealsTotal - 10; d--)
+   for(int d = dealsTotal - 1; d >= 0 && d >= dealsTotal - 20; d--)
    {
       ulong dealTicket = HistoryDealGetTicket(d);
       if(dealTicket > 0)
       {
          long entryType = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
-         if(entryType == DEAL_ENTRY_OUT) // Deal closed
+         long magic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+         if(entryType == DEAL_ENTRY_OUT && magic == (long)InpMagicNumber) // Deal closed
          {
             if(!firstDeal) json += ",";
             firstDeal = false;
             double dealProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+            double dealPrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
             json += "{";
             json += "\"ticket\":" + IntegerToString(dealTicket) + ",";
+            json += "\"symbol\":\"" + HistoryDealGetString(dealTicket, DEAL_SYMBOL) + "\",";
+            json += "\"close_price\":" + DoubleToString(dealPrice, 2) + ",";
             json += "\"pnl_usd\":" + DoubleToString(dealProfit, 2);
             json += "}";
          }
@@ -222,67 +232,122 @@ void ExecuteCommand(string json)
 {
    if(StringFind(json, "ORDER_OPEN") >= 0)
    {
+      // Trade the symbol named in the command, not the chart's Symbol().
+      // MT5 permits trading any symbol from any chart, and this bridge serves
+      // three instruments (XAUUSD/BTCUSD/ETHUSD) from a single EA instance.
+      string cmdSymbol = ExtractString(json, "\"symbol\":\"", "\"");
+      if(cmdSymbol == "") cmdSymbol = Symbol();
+
       bool isBuy = (StringFind(json, "\"type\":\"BUY\"") >= 0);
       double volume = ExtractDouble(json, "\"volume\":", 0.01);
       double sl = ExtractDouble(json, "\"sl\":", 0.0);
       double tp = ExtractDouble(json, "\"tp\":", 0.0);
       string cmdId = ExtractString(json, "\"id\":\"", "\"");
-      
+
+      // Make sure the symbol exists and is subscribed in Market Watch.
+      if(!SymbolSelect(cmdSymbol, true))
+      {
+         string msg = "Unknown or unavailable symbol: " + cmdSymbol;
+         Print("[AgenticMT5] Order blocked. ", msg);
+         ConfirmExecution(cmdId, "REJECTED", 0, msg);
+         return;
+      }
+
+      // Validate volume and SL/TP sides before sending, so the EA returns a
+      // readable rejection instead of a bare broker retcode.
+      double bid = SymbolInfoDouble(cmdSymbol, SYMBOL_BID);
+      double ask = SymbolInfoDouble(cmdSymbol, SYMBOL_ASK);
+
+      if(volume <= 0)
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0, "Invalid volume: " + DoubleToString(volume, 2));
+         return;
+      }
+      if(bid <= 0 || ask <= 0)
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0, "No price feed for " + cmdSymbol + " (bid/ask unavailable)");
+         return;
+      }
+      if(isBuy && sl > 0 && sl >= ask)
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0, "BUY SL " + DoubleToString(sl, 2) + " >= ask " + DoubleToString(ask, 2));
+         return;
+      }
+      if(!isBuy && sl > 0 && sl <= bid)
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0, "SELL SL " + DoubleToString(sl, 2) + " <= bid " + DoubleToString(bid, 2));
+         return;
+      }
+      if(isBuy && tp > 0 && tp <= bid)
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0, "BUY TP " + DoubleToString(tp, 2) + " <= bid " + DoubleToString(bid, 2));
+         return;
+      }
+      if(!isBuy && tp > 0 && tp >= ask)
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0, "SELL TP " + DoubleToString(tp, 2) + " >= ask " + DoubleToString(ask, 2));
+         return;
+      }
+
       bool success = false;
       if(isBuy)
       {
-         success = g_trade.Buy(volume, Symbol(), 0, sl, tp, "AgenticMT5");
+         success = g_trade.Buy(volume, cmdSymbol, 0, sl, tp, "AgenticMT5");
       }
       else
       {
-         success = g_trade.Sell(volume, Symbol(), 0, sl, tp, "AgenticMT5");
+         success = g_trade.Sell(volume, cmdSymbol, 0, sl, tp, "AgenticMT5");
       }
-      
+
       if(success)
       {
          ulong orderTicket = g_trade.ResultOrder();
-         Print("[AgenticMT5] Order executed successfully. Ticket: #", orderTicket);
+         Print("[AgenticMT5] Order executed successfully. Ticket: #", orderTicket,
+               " symbol=", cmdSymbol, " volume=", DoubleToString(volume, 2));
          ConfirmExecution(cmdId, "SUCCESS", orderTicket, "Executed in MT5");
       }
       else
       {
          uint retcode = g_trade.ResultRetcode();
-         Print("[AgenticMT5] Order execution failed. Retcode: ", retcode);
+         Print("[AgenticMT5] Order execution failed. Retcode: ", retcode,
+               " (", g_trade.ResultRetcodeDescription(), ")");
          ConfirmExecution(cmdId, "FAILED", 0, "Retcode: " + IntegerToString(retcode));
       }
    }
    else if(StringFind(json, "ORDER_CLOSE") >= 0)
    {
+      string cmdId = ExtractString(json, "\"id\":\"", "\"");
       ulong ticket = (ulong)ExtractDouble(json, "\"ticket\":", 0.0);
-      if(ticket > 0)
+      bool success = false;
+      if(ticket > 0 && g_pos.SelectByTicket(ticket) && g_pos.Magic() == InpMagicNumber)
       {
-         g_trade.PositionClose(ticket);
+         success = g_trade.PositionClose(ticket);
       }
       else
       {
-         // Close all expert positions
-         for(int i = PositionsTotal() - 1; i >= 0; i--)
-         {
-            ulong t = PositionGetTicket(i);
-            if(t > 0 && g_pos.SelectByTicket(t))
-            {
-               if(g_pos.Symbol() == Symbol() && g_pos.Magic() == InpMagicNumber)
-               {
-                  g_trade.PositionClose(t);
-               }
-            }
-         }
+         ConfirmExecution(cmdId, "REJECTED", 0, "Position not found or not owned by this EA");
+         return;
       }
+      if(success)
+         ConfirmExecution(cmdId, "SUCCESS", ticket, "Position closed in MT5");
+      else
+         ConfirmExecution(cmdId, "FAILED", ticket, "Close retcode: " + IntegerToString(g_trade.ResultRetcode()));
    }
    else if(StringFind(json, "ORDER_MODIFY") >= 0)
    {
+      string cmdId = ExtractString(json, "\"id\":\"", "\"");
       ulong ticket = (ulong)ExtractDouble(json, "\"ticket\":", 0.0);
       double sl = ExtractDouble(json, "\"sl\":", 0.0);
       double tp = ExtractDouble(json, "\"tp\":", 0.0);
-      if(ticket > 0)
+      if(ticket <= 0 || !g_pos.SelectByTicket(ticket) || g_pos.Magic() != InpMagicNumber)
       {
-         g_trade.PositionModify(ticket, sl, tp);
+         ConfirmExecution(cmdId, "REJECTED", 0, "Position not found or not owned by this EA");
+         return;
       }
+      if(g_trade.PositionModify(ticket, sl, tp))
+         ConfirmExecution(cmdId, "SUCCESS", ticket, "Position modified in MT5");
+      else
+         ConfirmExecution(cmdId, "FAILED", ticket, "Modify retcode: " + IntegerToString(g_trade.ResultRetcode()));
    }
 }
 
