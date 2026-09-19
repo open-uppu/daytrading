@@ -17,7 +17,7 @@ class TradingConfig(BaseSettings):
     initial_balance: float = 10000.0
     daily_target_pct: float = 0.03   # 3% target per day ($300 on $10,000)
     daily_max_loss_pct: float = 0.02 # 2% max daily loss cutoff ($200 on $10,000)
-    risk_per_trade_pct: float = 0.01  # 1% per trade
+    risk_per_trade_pct: float = 0.005  # 0.5% per trade for scalping
     min_rr_ratio: float = 1.5        # Minimum 1:1.5 Risk-to-Reward ratio
     target_rr_ratio: float = 2.0     # Preferred 1:2.0 Risk-to-Reward ratio
     
@@ -28,18 +28,18 @@ class TradingConfig(BaseSettings):
     spread_points: float = 0.25      # 25 cents spread ($25 on 1 lot)
     
     # Technical Analysis Parameters
-    timeframe_main: str = "M15"
-    timeframe_htf: str = "H1"
-    ema_fast: int = 20
-    ema_medium: int = 50
+    timeframe_main: str = "M5"
+    timeframe_htf: str = "M15"
+    ema_fast: int = 9
+    ema_medium: int = 21
     ema_slow: int = 200
     atr_period: int = 14
     rsi_period: int = 14
     confluence_threshold: float = 75.0  # Confluence score >= 75 required for entry
     
     # Loop & Observation settings
-    loop_interval_sec: int = 30       # Poll every 30 seconds
-    max_open_positions: int = 1       # Focus on 1 high-probability trade at a time
+    loop_interval_sec: int = 10       # Poll every 10 seconds for high-frequency scalping
+    max_open_positions: int = 3       # Allow up to 3 concurrent scalp positions per asset
     
     # Paths
     project_root: Path = BASE_DIR

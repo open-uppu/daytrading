@@ -106,7 +106,8 @@ def cmd_loop(args):
             squad = SquadManager(
                 broker_mode=args.mode,
                 initial_balance=args.balance,
-                agents_to_enable=selected_agents
+                agents_to_enable=selected_agents,
+                timeframe=getattr(args, "timeframe", config.timeframe_main)
             )
             break
         except RuntimeError as exc:
@@ -201,6 +202,7 @@ def main():
         loop_parser.add_argument("--mode", default="mt5", choices=["mt5", "paper", "mt4"], help="Broker execution mode")
         loop_parser.add_argument("--balance", type=float, default=10000.0, help="Initial account balance")
         loop_parser.add_argument("--interval", type=int, default=5, help="Loop interval in seconds")
+        loop_parser.add_argument("--timeframe", default=config.timeframe_main, choices=["M1", "M5", "M15", "H1"], help="Execution timeframe (e.g. M5 for high frequency)")
         loop_parser.add_argument("--max-iter", type=int, default=None, help="Stop after N iterations (for testing)")
         loop_parser.add_argument(
             "--wait-for-live-data", action="store_true",
