@@ -17,15 +17,15 @@ class TradingConfig(BaseSettings):
     initial_balance: float = 10000.0
     daily_target_pct: float = 0.03   # 3% target per day ($300 on $10,000)
     daily_max_loss_pct: float = 0.02 # 2% max daily loss cutoff ($200 on $10,000)
-    risk_per_trade_pct: float = 0.005  # 0.5% per trade for scalping
-    min_rr_ratio: float = 1.5        # Minimum 1:1.5 Risk-to-Reward ratio
-    target_rr_ratio: float = 2.0     # Preferred 1:2.0 Risk-to-Reward ratio
-    trailing_be_enabled: bool = True # Enable Dynamic Breakeven Trailing for 80%+ Win Rate
-    trailing_be_trigger_r: float = 0.80 # Move SL to Breakeven when trade reaches +0.8R
+    risk_per_trade_pct: float = 0.005  # 0.5% per trade for high-frequency scalping
+    min_rr_ratio: float = 1.3        # Minimum 1:1.3 Risk-to-Reward ratio
+    target_rr_ratio: float = 2.0     # Default 1:2.0 RR (M5 scalper overrides to 1:1.5)
+    trailing_be_enabled: bool = True # Enable Dynamic Breakeven Trailing
+    trailing_be_trigger_r: float = 0.50 # Move SL to Breakeven faster when trade reaches +0.50R
     ml_filter_enabled: bool = True   # Enable ML Meta-Labeling confidence filter
-    ml_confidence_threshold: float = 0.75 # Confidence threshold (0.75 - 0.85)
-    cadence_pacer_enabled: bool = True # Ensures at least 1 order every 10 minutes per active asset
-    min_entry_interval_sec: int = 600  # 10-minute cadence interval (600 seconds)
+    ml_confidence_threshold: float = 0.70 # Confidence threshold (0.70 - 0.85)
+    cadence_pacer_enabled: bool = True # Ensures orders every 5-10 minutes per active asset
+    min_entry_interval_sec: int = 300  # 5-minute cadence interval (300 seconds = 1 M5 bar)
     
     # Gold specific contract details
     contract_size: float = 100.0     # 1 standard lot = 100 oz

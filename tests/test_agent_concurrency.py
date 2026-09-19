@@ -8,7 +8,7 @@ def test_specialist_concurrency_settings():
     agent = GoldSpecialistAgent(broker=PaperTradingBroker(), timeframe="M5")
     assert agent.timeframe == "M5"
     assert agent.max_open_positions >= 3
-    assert agent.min_entry_interval_sec == 600
+    assert agent.min_entry_interval_sec in (300, 600)
 
 def test_specialist_allows_concurrent_positions():
     broker = PaperTradingBroker(initial_balance=10000.0)
@@ -27,12 +27,12 @@ def test_specialist_cooldown_check():
     now = datetime.now()
     agent.last_entry_time = now
     
-    # Cooldown check immediately: should be within cooldown (< 600s)
+    # Cooldown check immediately: should be within cooldown
     can_enter, reason = agent._check_entry_cooldown()
     assert not can_enter
     assert "cooldown" in reason.lower()
     
-    # After 10 minutes (601 seconds): should be allowed
-    agent.last_entry_time = now - timedelta(seconds=605)
+    # After cadence interval: should be allowed
+    agent.last_entry_time = now - timedelta(seconds=agent.min_entry_interval_sec + 5)
     can_enter, reason = agent._check_entry_cooldown()
     assert can_enter

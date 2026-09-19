@@ -121,12 +121,15 @@ class RiskManager:
         contract_size: Optional[float] = None,
         min_lot: Optional[float] = None,
         max_lot: Optional[float] = None,
-        min_sl_dist: Optional[float] = None
+        min_sl_dist: Optional[float] = None,
+        risk_pct: Optional[float] = None,
+        min_rr: Optional[float] = None,
+        target_rr: Optional[float] = None
     ):
         self.session_tracker = session_tracker or DailySessionTracker(config.initial_balance)
-        self.risk_pct = config.risk_per_trade_pct
-        self.min_rr = config.min_rr_ratio
-        self.target_rr = config.target_rr_ratio
+        self.risk_pct = risk_pct if risk_pct is not None else 0.01
+        self.min_rr = min_rr if min_rr is not None else getattr(config, "min_rr_ratio", 1.3)
+        self.target_rr = target_rr if target_rr is not None else 2.0
         self.contract_size = contract_size if contract_size is not None else config.contract_size
         self.min_lot = min_lot if min_lot is not None else config.min_lot
         self.max_lot = max_lot if max_lot is not None else config.max_lot
@@ -211,7 +214,7 @@ class RiskManager:
             return False, "Invalid SL distance (0)", 0.0
             
         rr_ratio = tp_dist / sl_dist
-        if rr_ratio < self.min_rr:
+        if round(rr_ratio, 2) < round(self.min_rr, 2):
             return False, f"Risk-Reward {rr_ratio:.2f} is below minimum allowed ({self.min_rr})", 0.0
 
         # 3. Calculate Lot Size

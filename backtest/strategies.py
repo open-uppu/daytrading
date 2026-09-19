@@ -372,8 +372,8 @@ def strategy_m5_scalper(window: pd.DataFrame, current_idx: int = -1, asset_type:
         if hour is not None and not (7 <= hour <= 21):
             return {"action": "HOLD"}
 
-        sl_dist = max(1.5 * atr, 1.0)
-        tp_dist = round(3.0 * atr, 2)  # 1:2.0 RR
+        sl_dist = max(1.25 * atr, 1.0)
+        tp_dist = round(1.8 * atr, 2)  # Fast Scalper Exit
 
         # Bullish Cross with macro trend filter (Price > EMA 200)
         bullish_cross = (prev_9 <= prev_21) and (ema_9 > ema_21)
@@ -395,8 +395,8 @@ def strategy_m5_scalper(window: pd.DataFrame, current_idx: int = -1, asset_type:
     # 2. Bitcoin (BTCUSD) M5 Scalper: Momentum Cross & Trend Pullback
     # -------------------------------------------------------------
     elif "btc" in asset:
-        sl_dist = max(1.5 * atr, 25.0)
-        tp_dist = round(3.0 * atr, 2)
+        sl_dist = max(1.25 * atr, 25.0)
+        tp_dist = round(1.8 * atr, 2)  # Fast Scalper Exit
 
         bullish_cross = ((prev_20 <= prev_50) and (ema_20 > ema_50)) or ((prev_9 <= prev_21) and (ema_9 > ema_21))
         bullish_pullback = (
@@ -437,8 +437,8 @@ def strategy_m5_scalper(window: pd.DataFrame, current_idx: int = -1, asset_type:
         curr_upper = float(upper_bb.iloc[-1])
         curr_mid = float(rolling_mean.iloc[-1])
 
-        sl_dist = max(1.5 * atr, 2.0)
-        tp_dist = round(3.0 * atr, 2)
+        sl_dist = max(1.25 * atr, 2.0)
+        tp_dist = round(1.8 * atr, 2)  # Fast Scalper Exit
 
         # Bullish: BB Lower bounce OR EMA Pullback in uptrend
         bb_bounce = (close_p <= curr_lower + (0.3 * atr)) and rsi <= 35.0

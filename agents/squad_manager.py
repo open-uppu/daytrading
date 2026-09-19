@@ -246,21 +246,11 @@ class SquadManager:
                 "specialist_results": {}
             }
 
+        portfolio_risk_reached = self._portfolio_open_risk_usd() >= (self.starting_portfolio_balance * self.max_loss_pct)
         agent_results = {}
         for key, agent in self.specialists.items():
-            # Reserve the portfolio loss budget across all symbols.  Without
-            # this gate all three specialists could each open a 1% position in
-            # the same round, exceeding the configured 2% portfolio cutoff.
-            if self._portfolio_open_risk_usd() >= self.starting_portfolio_balance * self.max_loss_pct:
-                agent_results[key] = {
-                    "symbol": agent.symbol,
-                    "asset": agent.asset_name,
-                    "status": "PORTFOLIO_RISK_BUDGET_REACHED",
-                    "reason": "Existing open-position risk consumes the portfolio daily loss budget.",
-                }
-                continue
             try:
-                res = agent.step()
+                res = agent.step(allow_new_entry=(not portfolio_risk_reached))
                 agent_results[key] = res
             except Exception as e:
                 logger.error(f"[Squad Manager] Error during {agent.symbol} agent step: {e}", exc_info=True)
@@ -327,9 +317,22 @@ class SquadManager:
         table.add_column("Today PnL", justify="right", width=12)
         table.add_column("Trades (W/L)", justify="center", width=14)
 
+        try:
+            open_positions = self.broker.get_open_positions()
+        except Exception:
+            open_positions = []
+
         for key, agent in self.specialists.items():
             summ = agent.session_tracker.get_summary()
-            status_text = "Target Lock" if summ.get("target_reached") else ("Loss Cutoff" if summ.get("max_loss_hit") else "Scanning")
+            sym_pos = [p for p in open_positions if p.get("symbol") == agent.symbol]
+            if sym_pos:
+                status_text = f"Holding ({len(sym_pos)} pos)"
+            elif summ.get("target_reached"):
+                status_text = "Target Lock"
+            elif summ.get("max_loss_hit"):
+                status_text = "Loss Cutoff"
+            else:
+                status_text = "Scanning"
             
             pnl = summ.get("closed_pnl_usd", 0.0)
             pnl_style = "green" if pnl >= 0 else "red"

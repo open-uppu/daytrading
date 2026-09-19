@@ -47,7 +47,7 @@ class BaseSpecialistAgent(ABC):
         journal_dir: Optional[Path] = None,
         strategy_type: str = "trend",
         max_open_positions: Optional[int] = None,
-        min_entry_interval_sec: int = 600
+        min_entry_interval_sec: Optional[int] = None
     ):
         self.symbol = symbol
         self.asset_name = asset_name
@@ -58,7 +58,7 @@ class BaseSpecialistAgent(ABC):
         self.min_sl_dist = min_sl_dist
         self.strategy_type = strategy_type
         self.max_open_positions = max_open_positions or config.max_open_positions
-        self.min_entry_interval_sec = min_entry_interval_sec
+        self.min_entry_interval_sec = min_entry_interval_sec if min_entry_interval_sec is not None else getattr(config, "min_entry_interval_sec", 300)
         self.last_entry_time: Optional[datetime] = None
         
         self.broker_mode = broker_mode or config.broker_mode
@@ -93,18 +93,22 @@ class BaseSpecialistAgent(ABC):
             strategy_type=self.strategy_type
         )
 
-        # 3. Risk & Session Management (Daily 3% target, 1.5% max risk per trade)
+        # 3. Risk & Session Management (Daily 3% target, 0.5% M5 scalper risk, 1.5% M15 risk)
         self.session_tracker = DailySessionTracker(
             starting_balance=self.initial_balance,
             target_pct=config.daily_target_pct,
             max_loss_pct=config.daily_max_loss_pct
         )
+        trade_risk = getattr(config, "risk_per_trade_pct", 0.005) if self.timeframe == "M5" else 0.015
+        target_rr = getattr(config, "target_rr_ratio", 1.5) if self.timeframe == "M5" else 2.0
         self.risk_manager = RiskManager(
             session_tracker=self.session_tracker,
             contract_size=self.contract_size,
             min_lot=self.min_lot,
             max_lot=self.max_lot,
-            min_sl_dist=self.min_sl_dist
+            min_sl_dist=self.min_sl_dist,
+            risk_pct=trade_risk,
+            target_rr=target_rr
         )
 
         # 4. Multimodal Vision Engine & Machine Learning Filter
@@ -268,7 +272,7 @@ class BaseSpecialistAgent(ABC):
             return False, f"Cadence cooldown active ({rem}s remaining for 10-min target)"
         return True, f"Cooldown cleared ({int(elapsed)}s since last entry)"
 
-    def step(self) -> Dict[str, Any]:
+    def step(self, allow_new_entry: bool = True) -> Dict[str, Any]:
         """
         Executes one complete autonomous analysis and execution cycle for this asset.
         """
@@ -285,7 +289,35 @@ class BaseSpecialistAgent(ABC):
         self.session_tracker.check_new_session(current_balance)
         summary = self.session_tracker.get_summary()
 
-        # 3. Check Daily Profit Target & Risk Gates
+        # 3. Check Open Positions for this Symbol & Manage them (Dynamic BE, Trailing)
+        all_open = self.broker.get_open_positions()
+        symbol_positions = [p for p in all_open if p.get("symbol") == self.symbol]
+        
+        for pos in symbol_positions:
+            self._manage_active_position(pos)
+
+        # 4. Check Risk Gates & Allowance for opening NEW positions
+        if not allow_new_entry:
+            if symbol_positions:
+                return {
+                    "symbol": self.symbol,
+                    "asset": self.asset_name,
+                    "iteration": self.iteration_count,
+                    "status": "MONITORING_POSITION",
+                    "reason": "Portfolio risk budget limit reached; monitoring active positions",
+                    "position": symbol_positions[0],
+                    "positions": symbol_positions,
+                    "session_summary": summary
+                }
+            return {
+                "symbol": self.symbol,
+                "asset": self.asset_name,
+                "iteration": self.iteration_count,
+                "status": "PORTFOLIO_RISK_BUDGET_REACHED",
+                "reason": "Existing open-position risk consumes the portfolio daily loss budget.",
+                "session_summary": summary
+            }
+
         can_trade, gate_reason = self.session_tracker.can_open_new_trade()
         if not can_trade:
             logger.info(f"{prefix} Standby: {gate_reason}")
@@ -293,17 +325,12 @@ class BaseSpecialistAgent(ABC):
                 "symbol": self.symbol,
                 "asset": self.asset_name,
                 "iteration": self.iteration_count,
-                "status": "LOCKED",
+                "status": "MONITORING_POSITION" if symbol_positions else "LOCKED",
                 "reason": gate_reason,
+                "position": symbol_positions[0] if symbol_positions else None,
+                "positions": symbol_positions,
                 "session_summary": summary
             }
-
-        # 4. Check Open Positions for this Symbol (Allow up to max_open_positions)
-        all_open = self.broker.get_open_positions()
-        symbol_positions = [p for p in all_open if p.get("symbol") == self.symbol]
-        
-        for pos in symbol_positions:
-            self._manage_active_position(pos)
 
         if len(symbol_positions) >= self.max_open_positions:
             logger.info(
@@ -319,7 +346,7 @@ class BaseSpecialistAgent(ABC):
                 "session_summary": summary
             }
 
-        # If already holding 1 or more positions, enforce 10-minute cadence spacing
+        # If already holding 1 or more positions, enforce cadence spacing
         if len(symbol_positions) > 0:
             can_enter, cooldown_reason = self._check_entry_cooldown()
             if not can_enter:
@@ -405,20 +432,22 @@ class BaseSpecialistAgent(ABC):
             is_market_active = (len(df_main) >= 5) and (df_main['close'].iloc[-1] != df_main['close'].iloc[-5])
 
             if can_pacer and elapsed >= self.min_entry_interval_sec and is_market_active:
+                sl_dist = max(1.3 * atr, self.min_sl_dist)
+                tp_dist = round(1.5 * sl_dist, 2)
                 if current_price >= htf_ema_200:
                     action = "BUY"
-                    sl_candidate = round(current_price - (1.5 * atr), 2)
-                    tp_candidate = round(current_price + (3.0 * atr), 2)
-                    reason = f"{self.symbol} M5 10-Min Cadence Entry (Macro Bullish)"
+                    sl_candidate = round(current_price - sl_dist, 2)
+                    tp_candidate = round(current_price + tp_dist, 2)
+                    reason = f"{self.symbol} M5 Rapid Cadence Entry (Macro Bullish)"
                 else:
                     action = "SELL"
-                    sl_candidate = round(current_price + (1.5 * atr), 2)
-                    tp_candidate = round(current_price - (3.0 * atr), 2)
-                    reason = f"{self.symbol} M5 10-Min Cadence Entry (Macro Bearish)"
+                    sl_candidate = round(current_price + sl_dist, 2)
+                    tp_candidate = round(current_price - tp_dist, 2)
+                    reason = f"{self.symbol} M5 Rapid Cadence Entry (Macro Bearish)"
 
                 signal = {"action": action, "sl": sl_candidate, "tp": tp_candidate, "reason": reason, "signal_type": "CADENCE_PACER"}
                 logger.info(
-                    f"[⏱️ CADENCE-PACER] {self.symbol} ครบกำหนด 10 นาที (Cadence {self.min_entry_interval_sec}s) "
+                    f"[⏱️ CADENCE-PACER] {self.symbol} ครบกำหนด Cadence ({self.min_entry_interval_sec}s) "
                     f"-> ออกออเดอร์ตามเทรนด์ M5 ทันที: {action} (SL: ${sl_candidate:,.2f}, TP: ${tp_candidate:,.2f})"
                 )
             else:

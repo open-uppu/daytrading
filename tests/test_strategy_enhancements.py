@@ -152,7 +152,39 @@ def test_cadence_pacer_periodic_entry():
         assert result["order"]["ticket"] is not None
         assert agent.last_entry_time is not None
         
-        # 2. Immediate second step -> should be blocked by 10-minute cadence cooldown
+        # 2. Immediate second step -> should be blocked by cadence cooldown
         result2 = agent.step()
         assert result2["status"] == "MONITORING_POSITION"
         assert "cooldown" in result2.get("reason", "").lower()
+
+
+def test_squad_manages_open_positions_when_risk_budget_exhausted():
+    """Validates that specialists continue to manage active positions even when the risk budget is full."""
+    broker = PaperTradingBroker(initial_balance=1000.0, symbol="BTCUSD")
+    # Open an order directly
+    order = broker.open_order(
+        symbol="BTCUSD",
+        order_type="BUY",
+        lots=0.1,
+        sl=79700.0,  # 300 distance * 0.1 lots = $30 risk (exceeds 2% of $1000 = $20)
+        tp=80500.0
+    )
+    assert order["ticket"] is not None
+
+    squad = SquadManager(
+        broker_mode="paper",
+        broker=broker,
+        initial_balance=1000.0,
+        agents_to_enable=["btc"]
+    )
+    
+    # Portfolio open risk ($30) > 2% max daily loss ($20)
+    assert squad._portfolio_open_risk_usd() >= squad.starting_portfolio_balance * squad.max_loss_pct
+
+    # Step squad: should NOT crash and should return MONITORING_POSITION for btc
+    step_result = squad.step()
+    assert step_result["status"] == "ACTIVE"
+    btc_res = step_result["specialist_results"]["btc"]
+    assert btc_res["status"] == "MONITORING_POSITION"
+    assert "risk budget" in btc_res.get("reason", "").lower()
+

@@ -32,7 +32,7 @@ class GoldSpecialistAgent(BaseSpecialistAgent):
         journal_dir: Optional[Path] = None,
         timeframe: str = "M15",
         max_open_positions: Optional[int] = None,
-        min_entry_interval_sec: int = 600
+        min_entry_interval_sec: Optional[int] = None
     ):
         min_sl = 0.8 if timeframe == "M5" else 2.0
         super().__init__(

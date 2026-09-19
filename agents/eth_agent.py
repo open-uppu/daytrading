@@ -32,7 +32,7 @@ class EthSpecialistAgent(BaseSpecialistAgent):
         journal_dir: Optional[Path] = None,
         timeframe: str = "M15",
         max_open_positions: Optional[int] = None,
-        min_entry_interval_sec: int = 600
+        min_entry_interval_sec: Optional[int] = None
     ):
         min_sl = 2.0 if timeframe == "M5" else 5.0
         strat_type = "trend" if timeframe == "M5" else "reversion"
