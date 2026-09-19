@@ -18,12 +18,26 @@ input int      InpPollIntervalMs   = 1000;                     // Polling Interv
 input ulong    InpMagicNumber     = 888999;                   // Expert Magic Number
 input ulong    InpDeviationPoints = 30;                       // Max Slippage/Deviation
 input bool     InpUseFilePipe     = false;                    // Enable File Pipe Fallback
+input bool     InpRequireStops    = true;                     // Reject unprotected live opens
 
 //--- Global Objects
 CTrade         g_trade;
 CPositionInfo  g_pos;
 CAccountInfo   g_account;
 datetime       g_lastHistorySync  = 0;
+
+// StringToCharArray(..., WHOLE_ARRAY, CP_UTF8) appends a C-string NUL.
+// HTTP JSON bodies must not include it; keep the conversion in one place so
+// telemetry and execution confirmations use the same wire format.
+bool JsonToUtf8Bytes(const string json, char &bytes[])
+{
+   int copied = StringToCharArray(json, bytes, 0, WHOLE_ARRAY, CP_UTF8);
+   if(copied <= 0)
+      return false;
+   if(ArraySize(bytes) > 0 && bytes[ArraySize(bytes) - 1] == 0)
+      ArrayResize(bytes, ArraySize(bytes) - 1);
+   return ArraySize(bytes) > 0;
+}
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -54,6 +68,9 @@ void OnDeinit(const int reason)
 void OnTimer()
 {
    SendTelemetry();
+   SendMarketBars("XAUUSD", PERIOD_M15, 120);
+   SendMarketBars("BTCUSD", PERIOD_M15, 120);
+   SendMarketBars("ETHUSD", PERIOD_M15, 120);
    PollCommands();
    CheckFileCommands();
 }
@@ -70,6 +87,56 @@ void OnTick()
       SendTelemetry();
       PollCommands();
       CheckFileCommands();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Upload fresh OHLCV bars for each specialist symbol               |
+//+------------------------------------------------------------------+
+void SendMarketBars(const string symbol, const ENUM_TIMEFRAMES timeframe, const int count)
+{
+   if(!SymbolSelect(symbol, true))
+      return;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   int copied = CopyRates(symbol, timeframe, 0, count, rates);
+   if(copied <= 0)
+      return;
+
+   string json = "{\"symbol\":\"" + symbol + "\",\"timeframe\":\"M15\",\"bars\":[";
+   bool first = true;
+   // Send oldest to newest so Python's tail(-1) is the current bar.
+   for(int i = copied - 1; i >= 0; i--)
+   {
+      if(!first) json += ",";
+      first = false;
+      json += "{\"timestamp\":" + IntegerToString((long)rates[i].time) + ",";
+      json += "\"open\":" + DoubleToString(rates[i].open, 8) + ",";
+      json += "\"high\":" + DoubleToString(rates[i].high, 8) + ",";
+      json += "\"low\":" + DoubleToString(rates[i].low, 8) + ",";
+      json += "\"close\":" + DoubleToString(rates[i].close, 8) + ",";
+      json += "\"volume\":" + IntegerToString((long)rates[i].tick_volume) + "}";
+   }
+   json += "]}";
+
+   char postData[];
+   char result[];
+   string resultHeaders;
+   string headers = "Content-Type: application/json\r\n";
+   if(!JsonToUtf8Bytes(json, postData))
+      return;
+
+   int res = WebRequest("POST", InpServerUrl + "/api/mt5/bars", headers, 1000,
+                        postData, result, resultHeaders);
+   if(res == -1)
+   {
+      static datetime lastBarsErr = 0;
+      if(TimeCurrent() - lastBarsErr >= 15)
+      {
+         lastBarsErr = TimeCurrent();
+         Print("[AgenticMT5] Bar upload failed for ", symbol, ". Error: ", GetLastError());
+      }
    }
 }
 
@@ -160,13 +227,17 @@ void SendTelemetry()
    char postData[];
    char result[];
    string resultHeaders;
-   StringToCharArray(json, postData, 0, WHOLE_ARRAY, CP_UTF8);
+   if(!JsonToUtf8Bytes(json, postData))
+   {
+      Print("[AgenticMT5] Could not encode telemetry JSON");
+      return;
+   }
    
    int res = WebRequest("POST", InpServerUrl + "/api/mt5/telemetry", headers, 1000, postData, result, resultHeaders);
    if(res == -1)
    {
       int err = GetLastError();
-      if(err == 4060 && InpUseFilePipe) // WebRequest restricted -> use file pipe
+      if((err == 4014 || err == 4060) && InpUseFilePipe) // WebRequest restricted -> use file pipe
       {
          WriteTelemetryToFile(json);
       }
@@ -238,7 +309,8 @@ void ExecuteCommand(string json)
       string cmdSymbol = ExtractString(json, "\"symbol\":\"", "\"");
       if(cmdSymbol == "") cmdSymbol = Symbol();
 
-      bool isBuy = (StringFind(json, "\"type\":\"BUY\"") >= 0);
+      string orderType = ExtractString(json, "\"type\":\"", "\"");
+      bool isBuy = (orderType == "BUY");
       double volume = ExtractDouble(json, "\"volume\":", 0.01);
       double sl = ExtractDouble(json, "\"sl\":", 0.0);
       double tp = ExtractDouble(json, "\"tp\":", 0.0);
@@ -266,6 +338,39 @@ void ExecuteCommand(string json)
       if(bid <= 0 || ask <= 0)
       {
          ConfirmExecution(cmdId, "REJECTED", 0, "No price feed for " + cmdSymbol + " (bid/ask unavailable)");
+         return;
+      }
+      if(orderType != "BUY" && orderType != "SELL")
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0, "Invalid order type: " + orderType);
+         return;
+      }
+      if(InpRequireStops && (sl <= 0 || tp <= 0))
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0, "Both SL and TP are required for agentic orders");
+         return;
+      }
+      double minVolume = SymbolInfoDouble(cmdSymbol, SYMBOL_VOLUME_MIN);
+      double maxVolume = SymbolInfoDouble(cmdSymbol, SYMBOL_VOLUME_MAX);
+      double volumeStep = SymbolInfoDouble(cmdSymbol, SYMBOL_VOLUME_STEP);
+      if(volume < minVolume || volume > maxVolume || volumeStep <= 0 ||
+         MathAbs(volume / volumeStep - MathRound(volume / volumeStep)) > 0.000001)
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0,
+                          "Volume must be within broker min/max and step (min=" +
+                          DoubleToString(minVolume, 2) + ", max=" + DoubleToString(maxVolume, 2) + ")");
+         return;
+      }
+      double point = SymbolInfoDouble(cmdSymbol, SYMBOL_POINT);
+      double minStopDistance = (double)SymbolInfoInteger(cmdSymbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
+      if(isBuy && ((sl > 0 && sl > ask - minStopDistance) || (tp > 0 && tp < ask + minStopDistance)))
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0, "BUY SL/TP violates broker minimum stop distance");
+         return;
+      }
+      if(!isBuy && ((sl > 0 && sl > bid - minStopDistance) || (tp > 0 && tp < bid + minStopDistance)))
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0, "SELL SL/TP violates broker minimum stop distance");
          return;
       }
       if(isBuy && sl > 0 && sl >= ask)
@@ -393,8 +498,14 @@ void ConfirmExecution(string cmdId, string status, ulong ticket, string msg)
    char postData[];
    char result[];
    string resultHeaders;
-   StringToCharArray(json, postData, 0, WHOLE_ARRAY, CP_UTF8);
-   WebRequest("POST", InpServerUrl + "/api/mt5/confirm", headers, 1000, postData, result, resultHeaders);
+   if(!JsonToUtf8Bytes(json, postData))
+   {
+      Print("[AgenticMT5] Could not encode execution confirmation");
+      return;
+   }
+   int res = WebRequest("POST", InpServerUrl + "/api/mt5/confirm", headers, 1000, postData, result, resultHeaders);
+   if(res == -1)
+      Print("[AgenticMT5] Confirmation delivery failed. Error: ", GetLastError(), " cmd=", cmdId);
 }
 
 //+------------------------------------------------------------------+

@@ -135,11 +135,29 @@ class BaseSpecialistAgent(ABC):
             closed_trades = []
 
         for t in closed_trades:
-            ticket = t["ticket"]
+            ticket = t.get("ticket")
+            if ticket is None:
+                logger.warning("[%s Specialist] Ignoring closed trade without ticket: %s", self.symbol, t)
+                continue
             if ticket not in self.known_closed_tickets:
                 self.known_closed_tickets.add(ticket)
                 pnl = t.get("profit", t.get("pnl_usd", 0.0))
                 self.session_tracker.record_closed_trade(pnl)
+
+                # Older bridge telemetry contains only ticket/symbol/PnL for a
+                # closed deal.  It is enough for accounting, but not enough to
+                # construct a TradeOutcome.  Never let an incomplete broker
+                # record crash the whole squad (and therefore bypass risk
+                # monitoring for the other assets).
+                required_fields = ("type", "open_price", "close_price", "lots")
+                missing = [field for field in required_fields if field not in t]
+                if missing:
+                    logger.warning(
+                        "[%s Specialist] Recorded PnL for closed ticket #%s but skipped "
+                        "autopsy; bridge telemetry is missing: %s",
+                        self.symbol, ticket, ", ".join(missing),
+                    )
+                    continue
                 
                 # Perform post-trade autopsy & learning
                 outcome = TradeOutcome(

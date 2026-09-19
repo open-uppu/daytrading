@@ -53,7 +53,9 @@ class TradingConfig(BaseSettings):
     # MT5 Bridge & Account Settings
     mt5_server: str = os.getenv("MT5_SERVER", "Exness-MT5Trial14")
     mt5_login: int = int(os.getenv("MT5_LOGIN", "416387559"))
-    mt5_password: str = os.getenv("MT5_PASSWORD", "like_Apple1")
+    # Credentials must come from the runtime environment; never ship a
+    # broker password in source control or use a source-code fallback.
+    mt5_password: str = os.getenv("MT5_PASSWORD", "")
     mt5_host: str = os.getenv("MT5_HOST", "127.0.0.1")
     mt5_port: int = int(os.getenv("MT5_PORT", "8000"))
     mt5_files_dir: str = os.getenv("MT5_FILES_DIR", "")

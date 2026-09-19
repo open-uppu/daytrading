@@ -3,10 +3,16 @@ Unit tests for MetaTrader 5 (MT5) Bridge Server and MT5Broker adapter.
 """
 
 import json
+import threading
+import time
+import tempfile
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+import mt5.bridge_server as bridge_server
 from mt5.bridge_server import app, MT5BridgeBroker
+from agents.gold_agent import GoldSpecialistAgent
 
 
 def test_mt5_bridge_telemetry_and_command_cycle():
@@ -195,6 +201,42 @@ def test_telemetry_accepts_mql5_trailing_null_terminator():
     assert response.json()["status"] == "ACK"
 
 
+def test_command_polling_is_fifo_and_never_discards_a_batch():
+    """Older EAs execute one envelope; later queued commands must remain queued."""
+    client = TestClient(app)
+    # Earlier test cases intentionally leave an unconfirmed command behind.
+    # Drain that in-process fixture state so this test asserts only its batch.
+    while client.get("/api/mt5/commands").json()["commands"]:
+        pass
+    first = {
+        "id": "fifo-first", "action": "ORDER_OPEN", "symbol": "BTCUSD",
+        "type": "BUY", "volume": 0.01, "sl": 80000.0, "tp": 82500.0,
+    }
+    second = {
+        "id": "fifo-second", "action": "ORDER_OPEN", "symbol": "BTCUSD",
+        "type": "SELL", "volume": 0.01, "sl": 82500.0, "tp": 80000.0,
+    }
+    assert client.post("/api/mt5/queue_command", json=first).status_code == 200
+    assert client.post("/api/mt5/queue_command", json=second).status_code == 200
+
+    assert client.get("/api/mt5/commands").json()["commands"] == [first]
+    assert client.get("/api/mt5/commands").json()["commands"] == [second]
+    assert client.get("/api/mt5/commands").json()["commands"] == []
+
+
+def test_queue_rejects_unprotected_or_malformed_open_order():
+    client = TestClient(app)
+    response = client.post(
+        "/api/mt5/queue_command",
+        json={
+            "id": "invalid-open", "action": "ORDER_OPEN", "symbol": "BTCUSD",
+            "type": "BUY", "volume": 0.01, "sl": 0.0, "tp": 82500.0,
+        },
+    )
+    assert response.status_code == 422
+    assert "sl must be a positive number" in response.json()["detail"]
+
+
 def test_command_ids_are_unique_across_brokers_and_command_types():
     """Confirmations must never be shared by independently-created brokers."""
     first = MT5BridgeBroker(in_process=True)
@@ -213,3 +255,85 @@ def test_command_ids_are_unique_across_brokers_and_command_types():
         modify_result["command_id"],
     }
     assert len(command_ids) == 3
+
+
+def test_live_market_data_is_symbol_scoped_and_fails_closed_without_bars():
+    """A live agent must never silently trade a backtest CSV or another symbol's bars."""
+    client = TestClient(app)
+    bridge_server._cached_bars.clear()
+    broker = MT5BridgeBroker(in_process=True)
+
+    with pytest.raises(RuntimeError, match="historical fallback"):
+        broker.get_market_data("XAUUSD", "M15", bars=60)
+
+    bars = [{"timestamp": i, "open": 100 + i, "high": 101 + i,
+             "low": 99 + i, "close": 100.5 + i, "volume": 10} for i in range(60)]
+    response = client.post("/api/mt5/bars", json={
+        "symbol": "XAUUSD", "timeframe": "M15", "bars": bars,
+    })
+    assert response.status_code == 200
+    assert len(broker.get_market_data("XAUUSD", "M15", bars=20)) == 20
+    with pytest.raises(RuntimeError, match="historical fallback"):
+        broker.get_market_data("BTCUSD", "M15", bars=20)
+
+
+def test_live_market_data_rejects_stale_bars():
+    bridge_server._cached_bars["XAUUSD:M15"] = {
+        "bars": [{"open": 1, "high": 2, "low": 0, "close": 1, "volume": 1}],
+        "received_at": bridge_server.monotonic_wall_time() - 91,
+    }
+    broker = MT5BridgeBroker(in_process=True)
+    with pytest.raises(RuntimeError, match="stale"):
+        broker.get_market_data("XAUUSD", "M15")
+
+
+def test_single_specialist_smoke_cycle_reaches_ea_confirmation():
+    """One supervised live-style cycle must finish only after EA confirmation."""
+    client = TestClient(app)
+    bridge_server._pending_commands.clear()
+    bridge_server._execution_results.clear()
+    bridge_server._cached_bars.clear()
+    client.post("/api/mt5/telemetry", json={
+        "account_number": 416387559, "server": "Exness-MT5Trial14",
+        "balance": 10000.0, "equity": 10000.0, "symbol": "XAUUSD",
+        "bid": 2650.0, "ask": 2650.25, "open_positions": [], "closed_orders": [],
+    })
+    bars = [{"timestamp": i, "open": 2650.0, "high": 2651.0,
+             "low": 2649.0, "close": 2650.0, "volume": 100} for i in range(60)]
+    assert client.post("/api/mt5/bars", json={
+        "symbol": "XAUUSD", "timeframe": "M15", "bars": bars,
+    }).status_code == 200
+
+    broker = MT5BridgeBroker(in_process=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        agent = GoldSpecialistAgent(
+            broker=broker, broker_mode="mt5", initial_balance=10000.0,
+            journal_dir=Path(tmp) / "xauusd",
+        )
+        agent.evaluate_strategy_signal = lambda _df: {
+            "action": "BUY", "sl": 2648.0, "tp": 2654.0,
+            "reason": "smoke-test",
+        }
+        agent.pre_trade_filter.evaluate_proposal = lambda **_kwargs: (True, "")
+
+        def simulated_ea():
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                commands = client.get("/api/mt5/commands").json()["commands"]
+                if commands:
+                    command = commands[0]
+                    client.post("/api/mt5/confirm", json={
+                        "command_id": command["id"], "status": "SUCCESS",
+                        "ticket": 900001, "retcode": 10009, "message": "smoke fill",
+                    })
+                    return
+                time.sleep(0.01)
+
+        ea_thread = threading.Thread(target=simulated_ea)
+        ea_thread.start()
+        result = agent.step()
+        ea_thread.join(timeout=3.0)
+
+    assert result["status"] == "ORDER_PLACED"
+    assert result["order"]["confirmed"] is True
+    assert result["order"]["ticket"] == 900001

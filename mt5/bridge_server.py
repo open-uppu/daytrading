@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import pandas as pd
 import logging
+from time import time as monotonic_wall_time
 from config import config
 from mt5.broker_interface import BaseBroker
 
@@ -67,7 +68,11 @@ _mt5_state = {
 }
 _pending_commands: List[Dict[str, Any]] = []
 _execution_results: Dict[str, Any] = {}
-_cached_bars: List[Dict[str, Any]] = []
+# Bars are keyed by symbol/timeframe.  A single global frame can silently make
+# BTC/ETH agents trade using XAUUSD candles, so never share it across markets.
+_cached_bars: Dict[str, Dict[str, Any]] = {}
+MARKET_DATA_MAX_AGE_SEC = 90.0
+MAX_EXECUTION_RESULTS = 1_000
 
 
 class TelemetryPayload(BaseModel):
@@ -96,9 +101,63 @@ class BarsPayload(BaseModel):
     bars: List[Dict[str, Any]]
 
 
+def _validate_command(command: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate the small, explicit command protocol accepted by the EA.
+
+    The bridge is a trade boundary.  Accepting an arbitrary JSON object here
+    would otherwise let a malformed request reach the EA and be interpreted as
+    a SELL, or create an unprotected live position.  This validation is shared
+    by REST and TestClient/in-process use so their behaviour cannot drift.
+    """
+    if not isinstance(command, dict):
+        raise ValueError("command must be a JSON object")
+
+    command_id = command.get("id")
+    action = command.get("action")
+    if not isinstance(command_id, str) or not command_id.strip():
+        raise ValueError("id must be a non-empty string")
+    if action not in {"ORDER_OPEN", "ORDER_CLOSE", "ORDER_MODIFY"}:
+        raise ValueError("action must be ORDER_OPEN, ORDER_CLOSE, or ORDER_MODIFY")
+
+    if action == "ORDER_OPEN":
+        if not isinstance(command.get("symbol"), str) or not command["symbol"].strip():
+            raise ValueError("ORDER_OPEN requires a non-empty symbol")
+        if command.get("type") not in {"BUY", "SELL"}:
+            raise ValueError("ORDER_OPEN type must be BUY or SELL")
+        for field in ("volume", "sl", "tp"):
+            value = command.get(field)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"ORDER_OPEN {field} must be a positive number")
+    elif action == "ORDER_CLOSE":
+        ticket = command.get("ticket")
+        if not isinstance(ticket, int) or isinstance(ticket, bool) or ticket <= 0:
+            raise ValueError("ORDER_CLOSE ticket must be a positive integer")
+    else:
+        ticket = command.get("ticket")
+        if not isinstance(ticket, int) or isinstance(ticket, bool) or ticket <= 0:
+            raise ValueError("ORDER_MODIFY ticket must be a positive integer")
+        if not any(
+            isinstance(command.get(field), (int, float))
+            and not isinstance(command.get(field), bool)
+            and command[field] > 0
+            for field in ("sl", "tp")
+        ):
+            raise ValueError("ORDER_MODIFY requires a positive sl or tp")
+    return command
+
+
 @app.get("/api/mt5/status")
 async def get_bridge_status():
     """Health check returning MT5 connection and account state."""
+    now = monotonic_wall_time()
+    market_data = {
+        key: {
+            "bars": len(value["bars"]),
+            "age_sec": round(max(0.0, now - float(value["received_at"])), 1),
+            "fresh": (now - float(value["received_at"])) <= MARKET_DATA_MAX_AGE_SEC,
+        }
+        for key, value in _cached_bars.items()
+    }
     return {
         "status": "ONLINE",
         "connected": _mt5_state["connected"],
@@ -106,7 +165,8 @@ async def get_bridge_status():
         "server": _mt5_state["server"],
         "balance": _mt5_state["balance"],
         "equity": _mt5_state["equity"],
-        "last_sync": _mt5_state["last_sync"]
+        "last_sync": _mt5_state["last_sync"],
+        "market_data": market_data,
     }
 
 
@@ -123,7 +183,9 @@ async def receive_telemetry(payload: TelemetryPayload):
     _mt5_state["ask"] = payload.ask
     _mt5_state["open_positions"] = payload.open_positions
     _mt5_state["connected"] = True
-    _mt5_state["last_sync"] = pd.Timestamp.now().isoformat()
+    # Store an explicit UTC heartbeat.  Local timestamps (e.g. Asia/Bangkok)
+    # otherwise look seven hours in the future to the live safety gate.
+    _mt5_state["last_sync"] = pd.Timestamp.now(tz="UTC").isoformat()
     
     # Track newly closed orders
     if payload.closed_orders:
@@ -137,17 +199,23 @@ async def receive_telemetry(payload: TelemetryPayload):
 
 @app.get("/api/mt5/commands")
 async def poll_commands():
-    """Polled by MT5 EA to retrieve queued trade commands."""
-    global _pending_commands
-    commands = list(_pending_commands)
-    _pending_commands.clear()
-    return {"commands": commands}
+    """Deliver exactly one FIFO command per EA poll.
+
+    The EA protocol consumes one command envelope.  Returning and clearing a
+    whole batch caused every command after the first to disappear without ever
+    reaching MetaTrader.  Keeping the rest in the queue makes batched agent
+    dispatch deterministic and backwards compatible with older EA builds.
+    """
+    command = _pending_commands.pop(0) if _pending_commands else None
+    return {"commands": [command] if command is not None else []}
 
 
 @app.post("/api/mt5/confirm")
 async def confirm_execution(payload: ConfirmPayload):
     """Called by MT5 EA to confirm MQL5 trade result."""
     _execution_results[payload.command_id] = payload.model_dump()
+    while len(_execution_results) > MAX_EXECUTION_RESULTS:
+        _execution_results.pop(next(iter(_execution_results)))
     logger.info(f"[MT5-CONFIRM] Command {payload.command_id}: status={payload.status}, ticket=#{payload.ticket}")
     return {"status": "RECORDED"}
 
@@ -167,8 +235,27 @@ async def get_execution_result(command_id: str):
 async def receive_bars(payload: BarsPayload):
     """Called by MT5 to upload latest bars."""
     global _cached_bars
-    _cached_bars = payload.bars
-    return {"status": "BARS_STORED", "count": len(payload.bars)}
+    key = f"{payload.symbol.upper()}:{payload.timeframe.upper()}"
+    _cached_bars[key] = {
+        "bars": payload.bars,
+        "received_at": monotonic_wall_time(),
+    }
+    return {"status": "BARS_STORED", "count": len(payload.bars), "key": key}
+
+
+@app.get("/api/mt5/bars")
+async def get_bars(symbol: str, timeframe: str = "M15"):
+    """Serve the latest symbol-scoped bars to an agent in another process."""
+    key = f"{symbol.upper()}:{timeframe.upper()}"
+    cached = _cached_bars.get(key)
+    if cached is None:
+        return {"symbol": symbol.upper(), "timeframe": timeframe.upper(), "bars": [], "received_at": None}
+    return {
+        "symbol": symbol.upper(),
+        "timeframe": timeframe.upper(),
+        "bars": cached["bars"],
+        "received_at": cached["received_at"],
+    }
 
 
 @app.get("/api/mt5/account")
@@ -183,6 +270,7 @@ async def get_account_state():
         "ask": _mt5_state["ask"],
         "symbol": _mt5_state["symbol"],
         "connected": _mt5_state["connected"],
+        "last_sync": _mt5_state["last_sync"],
         "open_positions": _mt5_state["open_positions"],
         "closed_orders": _mt5_state["closed_orders"]
     }
@@ -199,6 +287,10 @@ async def get_recently_closed():
 @app.post("/api/mt5/queue_command")
 async def queue_command_endpoint(command: Dict[str, Any]):
     """Receives commands from external client processes."""
+    try:
+        _validate_command(command)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     _pending_commands.append(command)
     logger.info(f"[MT5-QUEUE] Queued via REST: {command.get('action')} {command.get('volume')} lots on {command.get('symbol')}")
     return {"status": "QUEUED", "command_id": command.get("id")}
@@ -242,6 +334,12 @@ class MT5BridgeBroker(BaseBroker):
         process. That exact failure mode hid a missing `import httpx` for hours.
         """
         if self.in_process:
+            try:
+                _validate_command(command)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"[MT5-QUEUE] Bridge rejected command {command.get('id')}: {exc}"
+                ) from exc
             _pending_commands.append(command)
             logger.info(
                 f"[MT5-QUEUE] Queued in-process: {command.get('action')} "
@@ -278,23 +376,25 @@ class MT5BridgeBroker(BaseBroker):
         is NOT proof of failure (the EA may simply not be attached), so callers
         should treat None as "unconfirmed" rather than "rejected".
         """
-        if self.in_process:
-            return _execution_results.get(cmd_id)
-
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            try:
-                resp = httpx.get(
-                    f"{self.base_url}/api/mt5/execution_results",
-                    params={"command_id": cmd_id},
-                    timeout=5.0
-                )
-                if resp.status_code == 200:
-                    result = resp.json().get("result")
-                    if result:
-                        return result
-            except Exception as e:
-                logger.warning(f"[MT5-CONFIRM] Poll failed for {cmd_id}: {type(e).__name__}: {e}")
+            if self.in_process:
+                result = _execution_results.get(cmd_id)
+                if result:
+                    return result
+            else:
+                try:
+                    resp = httpx.get(
+                        f"{self.base_url}/api/mt5/execution_results",
+                        params={"command_id": cmd_id},
+                        timeout=5.0
+                    )
+                    if resp.status_code == 200:
+                        result = resp.json().get("result")
+                        if result:
+                            return result
+                except Exception as e:
+                    logger.warning(f"[MT5-CONFIRM] Poll failed for {cmd_id}: {type(e).__name__}: {e}")
             time.sleep(poll_interval)
         return None
 
@@ -326,14 +426,45 @@ class MT5BridgeBroker(BaseBroker):
         }
 
     def get_market_data(self, symbol: str = "XAUUSD", timeframe: str = "M15", bars: int = 100) -> pd.DataFrame:
-        """Returns cached bars or transforms telemetry into DataFrame."""
-        if _cached_bars:
-            df = pd.DataFrame(_cached_bars)
-            return df.tail(bars).copy().reset_index(drop=True)
-            
-        # Fallback to local cached historical data from data_loader
-        from backtest.data_loader import load_historical_data
-        df = load_historical_data(symbol=symbol, timeframe=timeframe)
+        """Return fresh MT5 bars; never substitute backtest data in live mode."""
+        key = f"{symbol.upper()}:{timeframe.upper()}"
+        if self.in_process:
+            cached = _cached_bars.get(key)
+        else:
+            try:
+                response = httpx.get(
+                    f"{self.base_url}/api/mt5/bars",
+                    params={"symbol": symbol, "timeframe": timeframe},
+                    timeout=3.0,
+                )
+                if response.status_code != 200:
+                    raise RuntimeError(f"HTTP {response.status_code}")
+                payload = response.json()
+                cached = {
+                    "bars": payload.get("bars", []),
+                    "received_at": payload.get("received_at"),
+                }
+            except Exception as exc:
+                raise RuntimeError(f"Live market data endpoint unavailable for {key}: {exc}") from exc
+        if cached is None:
+            raise RuntimeError(
+                f"Live market data unavailable for {key}; refusing to use historical fallback. "
+                "Check EA bar telemetry and WebRequest permissions."
+            )
+        if cached.get("received_at") is None:
+            raise RuntimeError(
+                f"Live market data unavailable for {key}; refusing to use historical fallback. "
+                "Check EA bar telemetry and WebRequest permissions."
+            )
+        age = monotonic_wall_time() - float(cached["received_at"])
+        if age > MARKET_DATA_MAX_AGE_SEC:
+            raise RuntimeError(
+                f"Live market data stale for {key} ({age:.1f}s old, limit {MARKET_DATA_MAX_AGE_SEC:.0f}s)."
+            )
+        df = pd.DataFrame(cached["bars"])
+        required = {"open", "high", "low", "close"}
+        if not required.issubset(df.columns):
+            raise RuntimeError(f"Live bars for {key} missing columns: {sorted(required - set(df.columns))}")
         return df.tail(bars).copy().reset_index(drop=True)
 
     def open_order(

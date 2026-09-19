@@ -15,6 +15,8 @@ from agents.btc_agent import BtcSpecialistAgent
 from agents.eth_agent import EthSpecialistAgent
 from agents.squad_manager import SquadManager
 from mt4.paper_broker import PaperTradingBroker
+from mt5.bridge_server import MT5BridgeBroker
+import mt5.bridge_server as mt5_state
 
 
 @pytest.fixture
@@ -125,3 +127,52 @@ def test_squad_manager_portfolio_target_lock():
     step_res = squad.step()
     assert step_res["status"] == "PORTFOLIO_DAILY_TARGET_REACHED"
     assert len(step_res["specialist_results"]) == 0
+
+
+def test_live_squad_uses_terminal_balance_not_cli_default(monkeypatch):
+    """A live risk limit must be based on the actual account, not $10k."""
+    class LiveBroker(PaperTradingBroker):
+        def get_account_info(self):
+            return {"balance": 500.0, "equity": 489.0}
+
+    squad = SquadManager(
+        broker=LiveBroker(initial_balance=10_000.0),
+        broker_mode="mt5",
+        initial_balance=10_000.0,
+        agents_to_enable=[],
+    )
+
+    status = squad.get_portfolio_daily_pnl()
+    assert status["starting_balance"] == 500.0
+    assert status["target_profit_usd"] == 15.0
+    assert status["max_loss_reached"] is True
+
+
+def test_real_mt5_squad_refuses_disconnected_placeholder_state(monkeypatch):
+    """The bridge's in-memory defaults are not valid authorization for live trading."""
+    monkeypatch.setitem(mt5_state._mt5_state, "connected", False)
+    monkeypatch.setitem(mt5_state._mt5_state, "last_sync", "")
+    broker = MT5BridgeBroker(in_process=True)
+    with pytest.raises(RuntimeError, match="not connected"):
+        SquadManager(broker=broker, broker_mode="mt5", agents_to_enable=[])
+
+
+def test_portfolio_loss_cutoff_closes_floating_loss_positions():
+    """Max loss is an equity guard and must liquidate active paper/live positions."""
+    broker = PaperTradingBroker(initial_balance=10_000.0)
+    opened = broker.open_order(
+        symbol="XAUUSD", order_type="BUY", lots=1.0,
+        sl=broker.current_price - 10.0, tp=broker.current_price + 30.0, comment="cutoff-test",
+    )
+    current = broker.current_price
+    broker.simulate_price_update(current - 3.0, current - 3.0, current - 3.0)
+    squad = SquadManager(
+        broker=broker, broker_mode="paper", initial_balance=10_000.0,
+        agents_to_enable=[],
+    )
+    # Preserve the pre-existing position while making the session reference
+    # balance explicit for this deterministic test.
+    squad.starting_portfolio_balance = 10_000.0
+    result = squad.step()
+    assert result["status"] == "PORTFOLIO_MAX_LOSS_CUTOFF"
+    assert opened["ticket"] not in [p["ticket"] for p in broker.get_open_positions()]

@@ -5,7 +5,9 @@ services:
     container_name: agentic_mt5_bridge
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # The EA and agent run on this machine; do not expose a trade-control
+      # endpoint to the LAN or the public network.
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
@@ -21,7 +23,10 @@ services:
   squad:
     build: .
     container_name: agentic_squad_agent
-    restart: unless-stopped
+    # Live order generation is opt-in and one-shot by default. Never restart a
+    # failed strategy loop and accidentally turn a check into unattended trade.
+    profiles: ["live"]
+    restart: "no"
     depends_on:
       - bridge
     env_file:
@@ -34,7 +39,8 @@ services:
       - ./journal:/app/journal
       - ./artifacts:/app/artifacts
       - ./data:/app/data
-    command: ["python3", "main.py", "run", "--agent=all", "--mode=mt5", "--interval=15"]
+    # First live validation is intentionally one specialist and one cycle.
+    command: ["python3", "main.py", "run", "--agent=gold", "--mode=mt5", "--max-iter=1", "--interval=15", "--wait-for-live-data"]
 
   # 3. Standalone Paper Trading (No MT5 needed, runs autonomous simulation)
   paper:

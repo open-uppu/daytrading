@@ -7,6 +7,7 @@ and the SquadManager with Portfolio 3% Daily Profit Protection.
 import sys
 import argparse
 import logging
+import time
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -95,11 +96,26 @@ def cmd_loop(args):
         expand=False
     ))
     
-    squad = SquadManager(
-        broker_mode=args.mode,
-        initial_balance=args.balance,
-        agents_to_enable=selected_agents
-    )
+    # In Docker, the bridge/EA can come up after the squad container.  Live
+    # mode may therefore wait for a valid terminal heartbeat and fresh bars,
+    # but it must never fill that gap with historical CSV data.
+    while True:
+        try:
+            squad = SquadManager(
+                broker_mode=args.mode,
+                initial_balance=args.balance,
+                agents_to_enable=selected_agents
+            )
+            break
+        except RuntimeError as exc:
+            if args.mode == "mt5" and args.wait_for_live_data:
+                console.print(
+                    f"[yellow]Live preflight not ready: {exc}[/yellow]\n"
+                    f"[dim]Waiting {args.interval}s for fresh MT5 telemetry and bars...[/dim]"
+                )
+                time.sleep(args.interval)
+                continue
+            raise
     
     squad.run_loop(max_iterations=args.max_iter, interval_sec=args.interval)
 
@@ -175,6 +191,10 @@ def main():
         loop_parser.add_argument("--balance", type=float, default=10000.0, help="Initial account balance")
         loop_parser.add_argument("--interval", type=int, default=5, help="Loop interval in seconds")
         loop_parser.add_argument("--max-iter", type=int, default=None, help="Stop after N iterations (for testing)")
+        loop_parser.add_argument(
+            "--wait-for-live-data", action="store_true",
+            help="In MT5 mode, wait safely for fresh telemetry/bars instead of exiting when EA is not ready"
+        )
     
     # Analyze command
     ana_parser = subparsers.add_parser("analyze", help="Perform single-pass multimodal analysis")
