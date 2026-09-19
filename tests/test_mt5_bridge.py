@@ -315,6 +315,7 @@ def test_single_specialist_smoke_cycle_reaches_ea_confirmation():
             "reason": "smoke-test",
         }
         agent.pre_trade_filter.evaluate_proposal = lambda **_kwargs: (True, "")
+        agent.ml_filter.evaluate_proposal = lambda **_kwargs: (True, 0.85, {"reason": "smoke-pass"})
 
         def simulated_ea():
             deadline = time.monotonic() + 3.0

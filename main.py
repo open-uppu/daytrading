@@ -84,6 +84,7 @@ def cmd_loop(args):
     """Runs the autonomous trading loop with the Multi-Asset Specialist Squad or single agent."""
     agents_map = {
         "all": ["gold", "btc", "eth"],
+        "duo": ["gold", "btc"],
         "gold": ["gold"],
         "btc": ["btc"],
         "eth": ["eth"]
@@ -146,6 +147,11 @@ def cmd_journal(args):
 
 def cmd_backtest(args):
     """Runs backtesting across single asset or full cross-market multi-asset comparison."""
+    if getattr(args, "ml", False):
+        from backtest.run_ml_backtest import run_full_ml_quant_benchmark
+        run_full_ml_quant_benchmark(initial_balance=args.balance)
+        return
+
     market = args.market.lower()
     tf = getattr(args, "timeframe", "M5").upper()
     
@@ -222,7 +228,7 @@ def main():
     # Loop / Run command
     for cmd_alias in ["loop", "run"]:
         loop_parser = subparsers.add_parser(cmd_alias, help="Run autonomous trading loop (squad or specialist)")
-        loop_parser.add_argument("--agent", default="all", choices=["all", "gold", "btc", "eth"], help="Specialist agent to run")
+        loop_parser.add_argument("--agent", default="all", choices=["all", "duo", "gold", "btc", "eth"], help="Specialist agent to run")
         loop_parser.add_argument("--mode", default="mt5", choices=["mt5", "paper", "mt4"], help="Broker execution mode")
         loop_parser.add_argument("--balance", type=float, default=10000.0, help="Initial account balance")
         loop_parser.add_argument("--interval", type=int, default=5, help="Loop interval in seconds")
@@ -246,6 +252,7 @@ def main():
     bt_parser.add_argument("--market", default="all", choices=["all", "gold", "btc", "eth", "xauusd", "btcusd", "ethusd"], help="Market to test")
     bt_parser.add_argument("--timeframe", default="M5", choices=["M5", "M15"], help="Timeframe for backtesting (default M5)")
     bt_parser.add_argument("--balance", type=float, default=10000.0, help="Initial capital in USD")
+    bt_parser.add_argument("--ml", action="store_true", help="Run Quant & ML Meta-Labeling benchmark targeting 80-85 percent Win Rate")
     
     # Bridge command
     subparsers.add_parser("bridge", help="Run MT5 FastAPI Bridge Server (connects with AgenticMT5Bridge.mq5)")

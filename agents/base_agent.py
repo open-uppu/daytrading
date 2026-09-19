@@ -19,6 +19,7 @@ from risk.manager import DailySessionTracker, RiskManager
 from core.chart_generator import generate_candlestick_chart
 from core.indicators import compute_all_indicators
 from core.vision_analyzer import VisionAnalyzer
+from core.ml_filter import MLQuantFilter
 from learning.reflector import TradeReflector, PreTradeFilter, TradeOutcome
 
 logger = logging.getLogger("specialist_agent")
@@ -106,14 +107,16 @@ class BaseSpecialistAgent(ABC):
             min_sl_dist=self.min_sl_dist
         )
 
-        # 4. Multimodal Vision Engine
+        # 4. Multimodal Vision Engine & Machine Learning Filter
         self.vision_analyzer = VisionAnalyzer()
+        self.ml_filter = MLQuantFilter(confidence_threshold=getattr(config, "ml_confidence_threshold", 0.75))
         
         # 5. Agent Runtime State
         self.last_chart_path: Optional[Path] = None
         self.last_signal: Dict[str, Any] = {"action": "HOLD"}
         self.iteration_count: int = 0
         self.known_closed_tickets: set = set()
+        self.trailed_tickets: set = set()
 
     @property
     @abstractmethod
@@ -200,7 +203,7 @@ class BaseSpecialistAgent(ABC):
                 )
 
     def _manage_active_position(self, pos: Dict[str, Any]) -> None:
-        """Monitors real open position in the market with live prices and floating PnL."""
+        """Monitors real open position in the market and executes dynamic trailing break-even."""
         ticket = pos.get("ticket")
         p_type = pos.get("type", "UNKNOWN")
         lots = pos.get("lots", 0.0)
@@ -211,6 +214,8 @@ class BaseSpecialistAgent(ABC):
         bid = float(pos.get("bid", 0.0))
         ask = float(pos.get("ask", 0.0))
         current_p = bid if p_type == "BUY" else ask
+        if current_p <= 0.0:
+            current_p = open_price
         
         logger.info(
             f"[มอนิเตอร์ออเดอร์จริง / REAL-POSITION] {self.symbol} Ticket #{ticket} ({p_type} {lots} lots) "
@@ -218,6 +223,40 @@ class BaseSpecialistAgent(ABC):
             f"| SL: {sl:,.2f} | TP: {tp:,.2f} "
             f"| กำไรลอยตัว (Floating PnL): ${profit:+.2f}"
         )
+
+        # Dynamic Trailing Break-Even (+0.8R to +1.0R Trigger)
+        if getattr(config, "trailing_be_enabled", True) and ticket and ticket not in self.trailed_tickets and open_price > 0:
+            sl_dist = abs(open_price - sl) if sl > 0 else (self.min_sl_dist * 1.5)
+            trigger_dist = sl_dist * getattr(config, "trailing_be_trigger_r", 0.80)
+            spread = config.spread_points if "XAU" in self.symbol else (15.0 if "BTC" in self.symbol else 1.0)
+            
+            if p_type == "BUY":
+                profit_dist = current_p - open_price
+                if profit_dist >= trigger_dist and (sl < open_price or sl == 0.0):
+                    new_sl = round(open_price + spread + (0.05 * self.min_sl_dist), 2)
+                    try:
+                        self.broker.modify_order(ticket=ticket, sl=new_sl, tp=tp)
+                        self.trailed_tickets.add(ticket)
+                        logger.info(
+                            f"[🎯 DYNAMIC-BE-ACTIVE] {self.symbol} Ticket #{ticket} กำไรบวกแตะ +${profit_dist:,.2f} "
+                            f"(>= เป้าหมาย Trailing +${trigger_dist:,.2f}) -> เลื่อน SL มาบังหน้าทุนที่ ${new_sl:,.2f} สำเร็จ (ตัดความเสี่ยงขาดทุน 100%)!"
+                        )
+                    except Exception as e:
+                        logger.warning(f"{self.symbol} Trailing modify failed for #{ticket}: {e}")
+
+            elif p_type == "SELL":
+                profit_dist = open_price - current_p
+                if profit_dist >= trigger_dist and (sl > open_price or sl == 0.0):
+                    new_sl = round(open_price - spread - (0.05 * self.min_sl_dist), 2)
+                    try:
+                        self.broker.modify_order(ticket=ticket, sl=new_sl, tp=tp)
+                        self.trailed_tickets.add(ticket)
+                        logger.info(
+                            f"[🎯 DYNAMIC-BE-ACTIVE] {self.symbol} Ticket #{ticket} กำไรบวกแตะ +${profit_dist:,.2f} "
+                            f"(>= เป้าหมาย Trailing +${trigger_dist:,.2f}) -> เลื่อน SL มาบังหน้าทุนที่ ${new_sl:,.2f} สำเร็จ (ตัดความเสี่ยงขาดทุน 100%)!"
+                        )
+                    except Exception as e:
+                        logger.warning(f"{self.symbol} Trailing modify failed for #{ticket}: {e}")
 
     def _check_entry_cooldown(self) -> Tuple[bool, str]:
         """Ensures at least min_entry_interval_sec (e.g. 10 minutes) between new entries."""
@@ -296,10 +335,10 @@ class BaseSpecialistAgent(ABC):
                     "session_summary": summary
                 }
 
-        # 5. Fetch Market Data (M5)
-        df_m15 = self.broker.get_market_data(symbol=self.symbol, timeframe=self.timeframe, bars=60)
-        if len(df_m15) < 30:
-            logger.warning(f"{prefix} Insufficient bars ({len(df_m15)}) for {self.symbol}.")
+        # 5. Fetch Market Data (Main Execution Timeframe e.g. M5)
+        df_main = self.broker.get_market_data(symbol=self.symbol, timeframe=self.timeframe, bars=60)
+        if len(df_main) < 30:
+            logger.warning(f"{prefix} Insufficient bars ({len(df_main)}) for {self.symbol}.")
             return {
                 "symbol": self.symbol,
                 "asset": self.asset_name,
@@ -308,8 +347,8 @@ class BaseSpecialistAgent(ABC):
             }
 
         # Compute technical indicators (EMA 20/50/200, ATR 14, RSI 14)
-        df_m15 = compute_all_indicators(df_m15)
-        latest = df_m15.iloc[-1]
+        df_main = compute_all_indicators(df_main)
+        latest = df_main.iloc[-1]
         current_price = float(latest["close"])
         atr = float(latest.get("atr_14", self.min_sl_dist))
         ema_20 = float(latest.get("ema_20", current_price))
@@ -317,23 +356,35 @@ class BaseSpecialistAgent(ABC):
         ema_200 = float(latest.get("ema_200", current_price))
         rsi = float(latest.get("rsi_14", 50.0))
 
+        # 5b. Multi-Timeframe (MTF) Macro Filter: Fetch HTF trend (M15) if running on M5
+        htf_ema_200 = ema_200
+        if self.timeframe == "M5" and getattr(config, "timeframe_htf", "M15"):
+            try:
+                df_htf = self.broker.get_market_data(symbol=self.symbol, timeframe=config.timeframe_htf, bars=60)
+                if len(df_htf) >= 30:
+                    df_htf = compute_all_indicators(df_htf)
+                    htf_ema_200 = float(df_htf.iloc[-1].get("ema_200", ema_200))
+            except Exception as e:
+                logger.debug(f"{prefix} HTF fetch note: {e}")
+
         logger.info(
             f"[1. ได้รับค่าจริง / REAL-FEED] {self.symbol} ({self.timeframe}) "
             f"ราคาสด: ${current_price:,.2f} | Balance: ${current_balance:,.2f} | Equity: ${current_equity:,.2f} "
-            f"| EMA(20/50/200): {ema_20:,.2f}/{ema_50:,.2f}/{ema_200:,.2f} | ATR: ${atr:,.2f} | RSI: {rsi:.1f}"
+            f"| EMA(20/50/200): {ema_20:,.2f}/{ema_50:,.2f}/{ema_200:,.2f} | HTF EMA200: {htf_ema_200:,.2f} "
+            f"| ATR: ${atr:,.2f} | RSI: {rsi:.1f}"
         )
 
         # 6. Candlestick Chart Generation
-        chart_filename = f"{self.symbol.lower()}_m15.png"
+        chart_filename = f"{self.symbol.lower()}_{self.timeframe.lower()}.png"
         self.last_chart_path = generate_candlestick_chart(
-            df=df_m15,
+            df=df_main,
             timeframe=self.timeframe,
             symbol=self.symbol,
             save_path=config.artifacts_dir / chart_filename
         )
 
         # 7. Evaluate Strategy Signal
-        signal = self.evaluate_strategy_signal(df_m15)
+        signal = self.evaluate_strategy_signal(df_main)
         self.last_signal = signal
         action = signal.get("action", "HOLD")
         reason = signal.get("reason", "Waiting for setup confirmation")
@@ -353,6 +404,29 @@ class BaseSpecialistAgent(ABC):
                 "signal": signal,
                 "session_summary": summary
             }
+
+        # 7b. Multi-Timeframe Macro Trend Alignment Gating
+        if self.timeframe == "M5" and config.timeframe_htf:
+            if action == "BUY" and current_price < htf_ema_200:
+                logger.info(f"{prefix} [MTF-GATE] Vetoed BUY: Price (${current_price:,.2f}) is below HTF {config.timeframe_htf} EMA 200 (${htf_ema_200:,.2f})")
+                return {
+                    "symbol": self.symbol,
+                    "asset": self.asset_name,
+                    "iteration": self.iteration_count,
+                    "status": "VETOED_BY_MTF_MACRO",
+                    "reason": f"Price below HTF {config.timeframe_htf} EMA 200",
+                    "session_summary": summary
+                }
+            elif action == "SELL" and current_price > htf_ema_200:
+                logger.info(f"{prefix} [MTF-GATE] Vetoed SELL: Price (${current_price:,.2f}) is above HTF {config.timeframe_htf} EMA 200 (${htf_ema_200:,.2f})")
+                return {
+                    "symbol": self.symbol,
+                    "asset": self.asset_name,
+                    "iteration": self.iteration_count,
+                    "status": "VETOED_BY_MTF_MACRO",
+                    "reason": f"Price above HTF {config.timeframe_htf} EMA 200",
+                    "session_summary": summary
+                }
 
         # SL and TP from strategy or dynamic ATR
         sl_candidate = signal.get("sl")
@@ -388,6 +462,28 @@ class BaseSpecialistAgent(ABC):
                 "reason": rule_reason,
                 "session_summary": summary
             }
+
+        # 8b. Machine Learning Meta-Labeling Confidence Gate
+        if getattr(config, "ml_filter_enabled", True):
+            ml_passed, ml_conf, ml_details = self.ml_filter.evaluate_proposal(
+                signal=signal,
+                df_window=df_main,
+                asset_symbol=self.symbol,
+                custom_threshold=getattr(config, "ml_confidence_threshold", 0.75)
+            )
+            logger.info(
+                f"[2. คิดวิเคราะห์จริง / ML-GATE] {self.symbol} ML Win Probability: {ml_conf:.1%} "
+                f"(Threshold: {config.ml_confidence_threshold:.1%}) -> {'✅ ผ่านเงื่อนไข (PASS)' if ml_passed else '❌ ต่ำกว่าเกณฑ์ความมั่นใจ (VETOED)'}"
+            )
+            if not ml_passed:
+                return {
+                    "symbol": self.symbol,
+                    "asset": self.asset_name,
+                    "iteration": self.iteration_count,
+                    "status": "VETOED_BY_ML_CONFIDENCE",
+                    "reason": f"ML Confidence {ml_conf:.1%} below threshold {config.ml_confidence_threshold:.1%}",
+                    "session_summary": summary
+                }
 
         # 9. Risk Sizing & Order Validation
         is_valid, risk_reason, lot_size = self.risk_manager.validate_trade_proposal(

@@ -4,4 +4,5 @@ __pycache__/
 .env
 artifacts/charts/*.png
 artifacts/*_m15.png
+artifacts/*_m5.png
 scratch/

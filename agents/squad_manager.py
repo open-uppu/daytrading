@@ -91,7 +91,14 @@ class SquadManager:
 
         # 3. Instantiate Specialist Agents
         self.specialists: Dict[str, BaseSpecialistAgent] = {}
-        enabled = [a.lower() for a in (agents_to_enable or ["gold", "btc", "eth"])]
+        raw_enabled = agents_to_enable or ["gold", "btc", "eth"]
+        enabled = []
+        for a in raw_enabled:
+            al = a.lower()
+            if al == "duo":
+                enabled.extend(["gold", "btc"])
+            else:
+                enabled.append(al)
         
         if "gold" in enabled or "xauusd" in enabled:
             self.specialists["gold"] = GoldSpecialistAgent(

@@ -20,6 +20,10 @@ class TradingConfig(BaseSettings):
     risk_per_trade_pct: float = 0.005  # 0.5% per trade for scalping
     min_rr_ratio: float = 1.5        # Minimum 1:1.5 Risk-to-Reward ratio
     target_rr_ratio: float = 2.0     # Preferred 1:2.0 Risk-to-Reward ratio
+    trailing_be_enabled: bool = True # Enable Dynamic Breakeven Trailing for 80%+ Win Rate
+    trailing_be_trigger_r: float = 0.80 # Move SL to Breakeven when trade reaches +0.8R
+    ml_filter_enabled: bool = True   # Enable ML Meta-Labeling confidence filter
+    ml_confidence_threshold: float = 0.75 # Confidence threshold (0.75 - 0.85)
     
     # Gold specific contract details
     contract_size: float = 100.0     # 1 standard lot = 100 oz
