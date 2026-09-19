@@ -35,7 +35,7 @@ class BaseSpecialistAgent(ABC):
         self,
         symbol: str,
         asset_name: str,
-        timeframe: str = "M15",
+        timeframe: str = "M5",
         contract_size: float = 100.0,
         min_lot: float = 0.01,
         max_lot: float = 10.0,
@@ -44,7 +44,9 @@ class BaseSpecialistAgent(ABC):
         broker_mode: str = "paper",
         initial_balance: Optional[float] = None,
         journal_dir: Optional[Path] = None,
-        strategy_type: str = "trend"
+        strategy_type: str = "trend",
+        max_open_positions: Optional[int] = None,
+        min_entry_interval_sec: int = 600
     ):
         self.symbol = symbol
         self.asset_name = asset_name
@@ -54,6 +56,9 @@ class BaseSpecialistAgent(ABC):
         self.max_lot = max_lot
         self.min_sl_dist = min_sl_dist
         self.strategy_type = strategy_type
+        self.max_open_positions = max_open_positions or config.max_open_positions
+        self.min_entry_interval_sec = min_entry_interval_sec
+        self.last_entry_time: Optional[datetime] = None
         
         self.broker_mode = broker_mode or config.broker_mode
         self.initial_balance = initial_balance or config.initial_balance
@@ -214,6 +219,16 @@ class BaseSpecialistAgent(ABC):
             f"| กำไรลอยตัว (Floating PnL): ${profit:+.2f}"
         )
 
+    def _check_entry_cooldown(self) -> Tuple[bool, str]:
+        """Ensures at least min_entry_interval_sec (e.g. 10 minutes) between new entries."""
+        if self.last_entry_time is None:
+            return True, "No recent entry"
+        elapsed = (datetime.now() - self.last_entry_time).total_seconds()
+        if elapsed < self.min_entry_interval_sec:
+            rem = int(self.min_entry_interval_sec - elapsed)
+            return False, f"Cadence cooldown active ({rem}s remaining for 10-min target)"
+        return True, f"Cooldown cleared ({int(elapsed)}s since last entry)"
+
     def step(self) -> Dict[str, Any]:
         """
         Executes one complete autonomous analysis and execution cycle for this asset.
@@ -244,24 +259,44 @@ class BaseSpecialistAgent(ABC):
                 "session_summary": summary
             }
 
-        # 4. Check Open Positions for this Symbol
+        # 4. Check Open Positions for this Symbol (Allow up to max_open_positions)
         all_open = self.broker.get_open_positions()
         symbol_positions = [p for p in all_open if p.get("symbol") == self.symbol]
         
-        if len(symbol_positions) >= 1:
-            pos = symbol_positions[0]
-            logger.info(f"{prefix} Monitoring active position #{pos['ticket']} ({pos['type']} {pos['lots']} lots).")
+        for pos in symbol_positions:
             self._manage_active_position(pos)
+
+        if len(symbol_positions) >= self.max_open_positions:
+            logger.info(
+                f"{prefix} Max open positions reached ({len(symbol_positions)}/{self.max_open_positions}). Monitoring active scalp trades."
+            )
             return {
                 "symbol": self.symbol,
                 "asset": self.asset_name,
                 "iteration": self.iteration_count,
                 "status": "MONITORING_POSITION",
-                "position": pos,
+                "position": symbol_positions[0],
+                "positions": symbol_positions,
                 "session_summary": summary
             }
 
-        # 5. Fetch Market Data (M15)
+        # If already holding 1 or more positions, enforce 10-minute cadence spacing
+        if len(symbol_positions) > 0:
+            can_enter, cooldown_reason = self._check_entry_cooldown()
+            if not can_enter:
+                logger.info(f"{prefix} Monitoring {len(symbol_positions)} position(s). {cooldown_reason}")
+                return {
+                    "symbol": self.symbol,
+                    "asset": self.asset_name,
+                    "iteration": self.iteration_count,
+                    "status": "MONITORING_POSITION",
+                    "reason": cooldown_reason,
+                    "position": symbol_positions[0],
+                    "positions": symbol_positions,
+                    "session_summary": summary
+                }
+
+        # 5. Fetch Market Data (M5)
         df_m15 = self.broker.get_market_data(symbol=self.symbol, timeframe=self.timeframe, bars=60)
         if len(df_m15) < 30:
             logger.warning(f"{prefix} Insufficient bars ({len(df_m15)}) for {self.symbol}.")
@@ -428,6 +463,7 @@ class BaseSpecialistAgent(ABC):
             }
 
         ticket = order_res.get("ticket")
+        self.last_entry_time = datetime.now()
         logger.info(
             f"[3. สั่งซื้อจริง / REAL-ORDER-FILLED] {self.symbol} โบรกเกอร์ยืนยันคำสั่งสำเร็จ! "
             f"Ticket: #{ticket} | {action} {lot_size} lots @ ${current_price:,.2f} "

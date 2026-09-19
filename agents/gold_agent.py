@@ -29,21 +29,27 @@ class GoldSpecialistAgent(BaseSpecialistAgent):
         broker: Optional[BaseBroker] = None,
         broker_mode: str = "paper",
         initial_balance: Optional[float] = None,
-        journal_dir: Optional[Path] = None
+        journal_dir: Optional[Path] = None,
+        timeframe: str = "M5",
+        max_open_positions: Optional[int] = None,
+        min_entry_interval_sec: int = 600
     ):
+        min_sl = 0.8 if timeframe == "M5" else 2.0
         super().__init__(
             symbol="XAUUSD",
             asset_name="Gold",
-            timeframe="M15",
+            timeframe=timeframe,
             contract_size=100.0,
             min_lot=0.01,
             max_lot=10.0,
-            min_sl_dist=2.0,
+            min_sl_dist=min_sl,
             broker=broker,
             broker_mode=broker_mode,
             initial_balance=initial_balance,
             journal_dir=journal_dir,
-            strategy_type="trend"
+            strategy_type="trend",
+            max_open_positions=max_open_positions,
+            min_entry_interval_sec=min_entry_interval_sec
         )
 
     @property
