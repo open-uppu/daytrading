@@ -37,10 +37,12 @@ class SquadManager:
         broker: Optional[BaseBroker] = None,
         broker_mode: str = "paper",
         initial_balance: Optional[float] = None,
-        agents_to_enable: Optional[List[str]] = None
+        agents_to_enable: Optional[List[str]] = None,
+        timeframe: str = "M5"
     ):
         self.broker_mode = broker_mode or config.broker_mode
         self.initial_balance = initial_balance or config.initial_balance
+        self.timeframe = timeframe or config.timeframe_main
         
         # 1. Initialize Shared Broker
         if broker is not None:
@@ -95,19 +97,22 @@ class SquadManager:
             self.specialists["gold"] = GoldSpecialistAgent(
                 broker=self.broker,
                 broker_mode=self.broker_mode,
-                initial_balance=self.initial_balance
+                initial_balance=self.initial_balance,
+                timeframe=self.timeframe
             )
         if "btc" in enabled or "btcusd" in enabled:
             self.specialists["btc"] = BtcSpecialistAgent(
                 broker=self.broker,
                 broker_mode=self.broker_mode,
-                initial_balance=self.initial_balance
+                initial_balance=self.initial_balance,
+                timeframe=self.timeframe
             )
         if "eth" in enabled or "ethusd" in enabled:
             self.specialists["eth"] = EthSpecialistAgent(
                 broker=self.broker,
                 broker_mode=self.broker_mode,
-                initial_balance=self.initial_balance
+                initial_balance=self.initial_balance,
+                timeframe=self.timeframe
             )
 
         if self.broker_mode == "mt5" and isinstance(self.broker, MT5BridgeBroker):

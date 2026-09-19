@@ -10,7 +10,7 @@ import pandas as pd
 import logging
 
 from agents.base_agent import BaseSpecialistAgent
-from backtest.strategies import strategy_mtf_momentum
+from backtest.strategies import strategy_mtf_momentum, strategy_m5_scalper
 from mt4.broker_interface import BaseBroker
 
 logger = logging.getLogger("gold_agent")
@@ -20,7 +20,7 @@ class GoldSpecialistAgent(BaseSpecialistAgent):
     """
     Gold (XAUUSD) Specialist Agent.
     - Contract Size: 100.0 oz ($1.00 move = $100 per lot).
-    - Optimal Strategy: Strategy D (MTF Momentum Cross - +8.04% Return, 74.1% Win Rate).
+    - Optimal Strategy on M5: High-Frequency M5 Scalper (Pullback, Breakout, Cross).
     - Session Awareness: London & New York session momentum expansion.
     """
 
@@ -54,11 +54,12 @@ class GoldSpecialistAgent(BaseSpecialistAgent):
 
     @property
     def strategy_name(self) -> str:
-        return "MTF_Momentum_Cross_D"
+        return "M5_Scalper_Gold" if self.timeframe == "M5" else "MTF_Momentum_Cross_D"
 
     def evaluate_strategy_signal(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Evaluates Strategy D: MTF Momentum Cross on Gold M15 data.
-        Aligns M15 EMA 20/50 cross with macro EMA 200 and RSI momentum band.
+        Evaluates M5 High-Frequency Scalper or M15 Strategy D.
         """
+        if self.timeframe == "M5":
+            return strategy_m5_scalper(df, current_idx=len(df) - 1, asset_type="gold")
         return strategy_mtf_momentum(df, current_idx=len(df) - 1)
