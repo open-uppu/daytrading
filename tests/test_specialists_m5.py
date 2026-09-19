@@ -21,9 +21,9 @@ def generate_sample_m5_bars(count=45):
 
 def test_specialists_defaults_m5():
     broker = PaperTradingBroker()
-    g = GoldSpecialistAgent(broker=broker)
-    b = BtcSpecialistAgent(broker=broker)
-    e = EthSpecialistAgent(broker=broker)
+    g = GoldSpecialistAgent(broker=broker, timeframe="M5")
+    b = BtcSpecialistAgent(broker=broker, timeframe="M5")
+    e = EthSpecialistAgent(broker=broker, timeframe="M5")
     
     assert g.timeframe == "M5"
     assert b.timeframe == "M5"

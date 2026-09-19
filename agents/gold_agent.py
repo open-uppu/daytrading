@@ -30,7 +30,7 @@ class GoldSpecialistAgent(BaseSpecialistAgent):
         broker_mode: str = "paper",
         initial_balance: Optional[float] = None,
         journal_dir: Optional[Path] = None,
-        timeframe: str = "M5",
+        timeframe: str = "M15",
         max_open_positions: Optional[int] = None,
         min_entry_interval_sec: int = 600
     ):

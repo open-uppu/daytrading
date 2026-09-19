@@ -128,17 +128,23 @@ def load_historical_data(
         
     except Exception as e:
         logger.warning(f"Failed to fetch live data for {clean_sym}: {e}. Generating fallback dataset.")
-        return generate_fallback_data(symbol=clean_sym, bars=2000)
+        df = generate_fallback_data(symbol=clean_sym, bars=2500, timeframe=timeframe)
+        try:
+            df.to_csv(file_path, index=False)
+        except Exception:
+            pass
+        return df
 
 
-def generate_fallback_data(symbol: str = "XAUUSD", bars: int = 2000) -> pd.DataFrame:
+def generate_fallback_data(symbol: str = "XAUUSD", bars: int = 2500, timeframe: str = "M5") -> pd.DataFrame:
     """Generates synthetic high-fidelity dataset if offline."""
     base_prices = {"XAUUSD": 2650.0, "BTCUSD": 63000.0, "ETHUSD": 2600.0}
     base = base_prices.get(symbol.upper(), 2600.0)
-    vol_scale = base * 0.0015
+    vol_scale = base * 0.0008 if timeframe.upper() == "M5" else base * 0.0015
+    freq_str = '5min' if timeframe.upper() == "M5" else '15min'
     
     np.random.seed(101)
-    dates = pd.date_range(end=datetime.now(), periods=bars, freq='15min')
+    dates = pd.date_range(end=datetime.now(), periods=bars, freq=freq_str)
     
     closes = [base]
     regime = 1

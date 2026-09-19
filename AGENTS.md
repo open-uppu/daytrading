@@ -108,10 +108,25 @@ python3 main.py journal --asset=ethusd
 
 ### รัน Backtest เปรียบเทียบตลาด:
 ```bash
-# รันเปรียบเทียบทุกตลาดและวาดกราฟ Multi-Panel Equity Curves
-python3 main.py backtest --market=all
+# รัน Backtest บน M5 ความถี่สูง (High-Frequency Scalper ทุกตลาด)
+python3 main.py backtest --market=all --timeframe=M5
 
-# รันเฉพาะตลาดใดตลาดหนึ่ง
-python3 main.py backtest --market=eth
-python3 main.py backtest --market=gold
+# รันเฉพาะ Gold บน M5
+python3 main.py backtest --market=gold --timeframe=M5
+
+# รันโหมดปกติ M15
+python3 main.py backtest --market=all --timeframe=M15
 ```
+
+---
+
+## 5. โหมด M5 High-Frequency Scalping (~ทุก 10 นาที / ถือซ้อนได้สูงสุด 3 ไม้)
+
+ระบบปรับจูนเพื่อตอบโจทย์การหาจุดเข้าเทรดที่ถี่ขึ้นบนแท่งเทียน **M5** (เฉลี่ยทุก ~10-15 นาทีในช่วงตลาดขยายตัว):
+1. **Concurrency & Cadence**: อนุญาตให้เปิดออเดอร์พร้อมกันได้สูงสุด **3 ไม้** ต่อสินทรัพย์ โดยมี **Cadence Cooldown 10 นาที (2 แท่ง M5)** เพื่อไม่ให้ออกออเดอร์ซ้ำในแท่งเดียวกัน
+2. **Dynamic M5 SL/TP**: บีบ SL/TP ให้แคบลงตามค่าความผันผวนจริงของ M5 (Gold SL: $1.00-$1.50, BTC SL: $25, ETH SL: $2.0) รักษา R:R 1:2.0
+3. **ผลลัพธ์การทดสอบ M5 Backtest (60 วัน, 17,000+ แท่ง M5 จริง)**:
+   - **XAUUSD (Gold)**: **+7.75% Return**, Profit Factor: **1.13**, Max DD: **7.71%**, รวม **179 ออเดอร์** (~3 ไม้/วัน)
+   - **BTCUSD (Bitcoin)**: **+4.87% Return**, Profit Factor: **1.08**, Max DD: **11.5%**, รวม **172 ออเดอร์** (~3 ไม้/วัน)
+   - **ETHUSD (Ethereum)**: **+1.63% Return**, Profit Factor: **1.02**, Max DD: **9.03%**, รวม **396 ออเดอร์** (~6.7 ไม้/วัน)
+

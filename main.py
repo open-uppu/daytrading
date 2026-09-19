@@ -147,7 +147,31 @@ def cmd_journal(args):
 def cmd_backtest(args):
     """Runs backtesting across single asset or full cross-market multi-asset comparison."""
     market = args.market.lower()
+    tf = getattr(args, "timeframe", "M5").upper()
     
+    if tf == "M5":
+        from backtest.run_m5_backtest import run_m5_squad_backtest, run_single_asset_m5_backtest
+        if market == "all":
+            run_m5_squad_backtest(initial_balance=args.balance)
+            return
+        else:
+            sym = "XAUUSD" if market in ["gold", "xauusd"] else ("BTCUSD" if market in ["btc", "btcusd"] else "ETHUSD")
+            res = run_single_asset_m5_backtest(symbol=sym, initial_balance=args.balance)
+            color_ret = "green" if res['total_return_pct'] >= 0 else "red"
+            console.print(Panel(
+                f"[bold {color_ret}]M5 High-Frequency Scalper for {sym}[/bold {color_ret}]\n"
+                f"Total Return: [bold]{res['total_return_pct']:+.2f}%[/bold]\n"
+                f"Win Rate: [bold]{res['win_rate_pct']:.1f}%[/bold]\n"
+                f"Profit Factor: [bold]{res['profit_factor']:.2f}[/bold]\n"
+                f"Total Trades: [bold]{res['total_trades']}[/bold] (~{res['trades_per_day']} trades/day)\n"
+                f"Cadence (Entry Spacing): [bold yellow]{res['avg_minutes_between_trades']} minutes/trade[/bold yellow]\n"
+                f"Days Hit 3% Target: [bold]{res['days_hit_3pct_target']} days[/bold]\n"
+                f"Max Drawdown: [bold]{res['max_drawdown_pct']:.2f}%[/bold]",
+                title=f"M5 Scalper Performance: {sym}",
+                border_style=color_ret
+            ))
+            return
+
     if market == "all":
         from backtest.run_cross_market_comparison import run_cross_market_study
         console.print("[bold cyan]Starting Full Cross-Market Research Study (Gold, BTC, ETH)...[/bold cyan]")
@@ -220,6 +244,7 @@ def main():
     # Backtest command
     bt_parser = subparsers.add_parser("backtest", help="Run strategy backtests and comparative leaderboards")
     bt_parser.add_argument("--market", default="all", choices=["all", "gold", "btc", "eth", "xauusd", "btcusd", "ethusd"], help="Market to test")
+    bt_parser.add_argument("--timeframe", default="M5", choices=["M5", "M15"], help="Timeframe for backtesting (default M5)")
     bt_parser.add_argument("--balance", type=float, default=10000.0, help="Initial capital in USD")
     
     # Bridge command
