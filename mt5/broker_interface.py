@@ -16,7 +16,7 @@ class BaseBroker(ABC):
         pass
 
     @abstractmethod
-    def get_market_data(self, symbol: str, timeframe: str = "M15", bars: int = 100) -> pd.DataFrame:
+    def get_market_data(self, symbol: str, timeframe: str = "M5", bars: int = 100) -> pd.DataFrame:
         """Fetches OHLCV candlestick data."""
         pass
 

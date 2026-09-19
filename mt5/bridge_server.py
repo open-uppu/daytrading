@@ -425,7 +425,7 @@ class MT5BridgeBroker(BaseBroker):
             "open_positions_count": len(_mt5_state["open_positions"])
         }
 
-    def get_market_data(self, symbol: str = "XAUUSD", timeframe: str = "M15", bars: int = 100) -> pd.DataFrame:
+    def get_market_data(self, symbol: str = "XAUUSD", timeframe: str = "M5", bars: int = 100) -> pd.DataFrame:
         """Return fresh MT5 bars; never substitute backtest data in live mode."""
         key = f"{symbol.upper()}:{timeframe.upper()}"
         if self.in_process:

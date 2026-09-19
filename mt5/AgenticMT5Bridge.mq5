@@ -19,6 +19,23 @@ input ulong    InpMagicNumber     = 888999;                   // Expert Magic Nu
 input ulong    InpDeviationPoints = 30;                       // Max Slippage/Deviation
 input bool     InpUseFilePipe     = false;                    // Enable File Pipe Fallback
 input bool     InpRequireStops    = true;                     // Reject unprotected live opens
+input ENUM_TIMEFRAMES InpTimeframe = PERIOD_M5;               // Primary Trading Timeframe (Default M5)
+
+//--- Helper function to convert ENUM_TIMEFRAMES to string
+string TimeframeToStr(const ENUM_TIMEFRAMES tf)
+{
+   switch(tf)
+   {
+      case PERIOD_M1:  return "M1";
+      case PERIOD_M5:  return "M5";
+      case PERIOD_M15: return "M15";
+      case PERIOD_M30: return "M30";
+      case PERIOD_H1:  return "H1";
+      case PERIOD_H4:  return "H4";
+      case PERIOD_D1:  return "D1";
+      default:         return "M5";
+   }
+}
 
 //--- Global Objects
 CTrade         g_trade;
@@ -68,9 +85,15 @@ void OnDeinit(const int reason)
 void OnTimer()
 {
    SendTelemetry();
-   SendMarketBars("XAUUSD", PERIOD_M15, 120);
-   SendMarketBars("BTCUSD", PERIOD_M15, 120);
-   SendMarketBars("ETHUSD", PERIOD_M15, 120);
+   SendMarketBars("XAUUSD", InpTimeframe, 120);
+   SendMarketBars("BTCUSD", InpTimeframe, 120);
+   SendMarketBars("ETHUSD", InpTimeframe, 120);
+   if(InpTimeframe != PERIOD_M15)
+   {
+      SendMarketBars("XAUUSD", PERIOD_M15, 60);
+      SendMarketBars("BTCUSD", PERIOD_M15, 60);
+      SendMarketBars("ETHUSD", PERIOD_M15, 60);
+   }
    PollCommands();
    CheckFileCommands();
 }
@@ -104,7 +127,7 @@ void SendMarketBars(const string symbol, const ENUM_TIMEFRAMES timeframe, const 
    if(copied <= 0)
       return;
 
-   string json = "{\"symbol\":\"" + symbol + "\",\"timeframe\":\"M15\",\"bars\":[";
+   string json = "{\"symbol\":\"" + symbol + "\",\"timeframe\":\"" + TimeframeToStr(timeframe) + "\",\"bars\":[";
    bool first = true;
    // Send oldest to newest so Python's tail(-1) is the current bar.
    for(int i = copied - 1; i >= 0; i--)
