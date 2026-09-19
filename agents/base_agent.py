@@ -17,6 +17,7 @@ from mt5.bridge_server import MT5BridgeBroker
 from mt4.bridge_server import MT4BridgeBroker
 from risk.manager import DailySessionTracker, RiskManager
 from core.chart_generator import generate_candlestick_chart
+from core.indicators import compute_all_indicators
 from core.vision_analyzer import VisionAnalyzer
 from learning.reflector import TradeReflector, PreTradeFilter, TradeOutcome
 
@@ -143,6 +144,13 @@ class BaseSpecialistAgent(ABC):
                 self.known_closed_tickets.add(ticket)
                 pnl = t.get("profit", t.get("pnl_usd", 0.0))
                 self.session_tracker.record_closed_trade(pnl)
+                current_bal = self.session_tracker.starting_balance + self.session_tracker.closed_pnl_today
+                logger.info(
+                    f"[4. ปิดจริง / REAL-ORDER-CLOSED] {self.symbol} Ticket #{ticket} ออเดอร์ปิดแล้วในตลาด! "
+                    f"| ราคาปิด: {t.get('close_price', 'N/A')} "
+                    f"| กำไร/ขาดทุนจริง (Realized PnL): ${pnl:+.2f} "
+                    f"| Balance พอร์ตล่าสุด: ${current_bal:,.2f}"
+                )
 
                 # Older bridge telemetry contains only ticket/symbol/PnL for a
                 # closed deal.  It is enough for accounting, but not enough to
@@ -181,11 +189,30 @@ class BaseSpecialistAgent(ABC):
                     rsi=50.0
                 )
                 res = self.reflector.process_closed_trade(outcome)
-                logger.info(f"[{self.symbol} Specialist] Trade #{ticket} autopsy complete: {res['diagnosis_code']}")
+                logger.info(
+                    f"[4. ปิดจริง / AUTOPSY-SAVED] {self.symbol} บันทึกบทเรียนการเทรดสำเร็จ: "
+                    f"รหัสชันสูตร: {res['diagnosis_code']} ➔ ไฟล์: {res['autopsy_path']}"
+                )
 
     def _manage_active_position(self, pos: Dict[str, Any]) -> None:
-        """Applies trailing stops or breakeven protection on profitable positions."""
-        pass
+        """Monitors real open position in the market with live prices and floating PnL."""
+        ticket = pos.get("ticket")
+        p_type = pos.get("type", "UNKNOWN")
+        lots = pos.get("lots", 0.0)
+        open_price = float(pos.get("open_price", 0.0))
+        sl = float(pos.get("sl", 0.0))
+        tp = float(pos.get("tp", 0.0))
+        profit = float(pos.get("profit", 0.0))
+        bid = float(pos.get("bid", 0.0))
+        ask = float(pos.get("ask", 0.0))
+        current_p = bid if p_type == "BUY" else ask
+        
+        logger.info(
+            f"[มอนิเตอร์ออเดอร์จริง / REAL-POSITION] {self.symbol} Ticket #{ticket} ({p_type} {lots} lots) "
+            f"| ราคาเข้า: {open_price:,.2f} ➔ ราคาสดตลาด: {current_p:,.2f} "
+            f"| SL: {sl:,.2f} | TP: {tp:,.2f} "
+            f"| กำไรลอยตัว (Floating PnL): ${profit:+.2f}"
+        )
 
     def step(self) -> Dict[str, Any]:
         """
@@ -245,6 +272,22 @@ class BaseSpecialistAgent(ABC):
                 "status": "INSUFFICIENT_DATA"
             }
 
+        # Compute technical indicators (EMA 20/50/200, ATR 14, RSI 14)
+        df_m15 = compute_all_indicators(df_m15)
+        latest = df_m15.iloc[-1]
+        current_price = float(latest["close"])
+        atr = float(latest.get("atr_14", self.min_sl_dist))
+        ema_20 = float(latest.get("ema_20", current_price))
+        ema_50 = float(latest.get("ema_50", current_price))
+        ema_200 = float(latest.get("ema_200", current_price))
+        rsi = float(latest.get("rsi_14", 50.0))
+
+        logger.info(
+            f"[1. ได้รับค่าจริง / REAL-FEED] {self.symbol} ({self.timeframe}) "
+            f"ราคาสด: ${current_price:,.2f} | Balance: ${current_balance:,.2f} | Equity: ${current_equity:,.2f} "
+            f"| EMA(20/50/200): {ema_20:,.2f}/{ema_50:,.2f}/{ema_200:,.2f} | ATR: ${atr:,.2f} | RSI: {rsi:.1f}"
+        )
+
         # 6. Candlestick Chart Generation
         chart_filename = f"{self.symbol.lower()}_m15.png"
         self.last_chart_path = generate_candlestick_chart(
@@ -258,6 +301,12 @@ class BaseSpecialistAgent(ABC):
         signal = self.evaluate_strategy_signal(df_m15)
         self.last_signal = signal
         action = signal.get("action", "HOLD")
+        reason = signal.get("reason", "Waiting for setup confirmation")
+
+        logger.info(
+            f"[2. คิดวิเคราะห์จริง / STRATEGY-ANALYSIS] {self.symbol} กลยุทธ์ [{self.strategy_name}] "
+            f"➔ การตัดสินใจ: {action} ({reason})"
+        )
 
         if action not in ["BUY", "SELL"]:
             return {
@@ -269,10 +318,6 @@ class BaseSpecialistAgent(ABC):
                 "signal": signal,
                 "session_summary": summary
             }
-
-        current_price = float(df_m15.iloc[-1]["close"])
-        atr = float(df_m15.iloc[-1].get("atr_14", self.min_sl_dist))
-        ema_200 = float(df_m15.iloc[-1].get("ema_200", current_price))
 
         # SL and TP from strategy or dynamic ATR
         sl_candidate = signal.get("sl")
@@ -291,6 +336,11 @@ class BaseSpecialistAgent(ABC):
             sl_price=sl_candidate,
             ema_200=ema_200,
             atr=atr
+        )
+
+        logger.info(
+            f"[2. คิดวิเคราะห์จริง / RULES-CHECK] {self.symbol} ตรวจสอบกฎความปลอดภัย (Pre-Trade Filter): "
+            f"{'✅ ผ่านเงื่อนไข' if rule_passed else f'❌ ติดกฎข้อห้าม: ' + rule_reason}"
         )
 
         if not rule_passed:
@@ -313,6 +363,16 @@ class BaseSpecialistAgent(ABC):
             equity=current_equity
         )
 
+        sl_dist = abs(current_price - sl_candidate)
+        tp_dist = abs(tp_candidate - current_price)
+        rr_ratio = tp_dist / max(sl_dist, 0.001)
+
+        logger.info(
+            f"[2. คิดวิเคราะห์จริง / RISK-SIZING] {self.symbol} คำนวณความเสี่ยงและขนาดสัญญา: "
+            f"Lot Size = {lot_size} lots | Entry = ${current_price:,.2f} | SL = ${sl_candidate:,.2f} (เสี่ยง: ${sl_dist:,.2f}) "
+            f"| TP = ${tp_candidate:,.2f} (เป้าหมาย: ${tp_dist:,.2f}) | R:R = 1:{rr_ratio:.1f} | ผลตรวจ: {risk_reason}"
+        )
+
         if not is_valid:
             logger.warning(f"{prefix} Risk rejected trade: {risk_reason}")
             return {
@@ -325,9 +385,10 @@ class BaseSpecialistAgent(ABC):
             }
 
         # 10. Execute Order via Broker
-        # A broker that cannot deliver the command now raises instead of
-        # pretending success, so failures surface as BROKER_ERROR rather than
-        # a phantom ORDER_PLACED.
+        logger.info(
+            f"[3. สั่งซื้อจริง / REAL-ORDER-DISPATCH] {self.symbol} กำลังส่งคำสั่ง {action} {lot_size} lots "
+            f"ไปยังโบรกเกอร์ (SL: ${sl_candidate:,.2f}, TP: ${tp_candidate:,.2f})..."
+        )
         try:
             order_res = self.broker.open_order(
                 symbol=self.symbol,
@@ -339,8 +400,7 @@ class BaseSpecialistAgent(ABC):
             )
         except Exception as e:
             logger.error(
-                f"{prefix} ORDER DELIVERY FAILED for {action} {lot_size} lots "
-                f"{self.symbol}: {type(e).__name__}: {e}"
+                f"[3. สั่งซื้อจริง / ORDER-FAILED] {self.symbol} ส่งคำสั่งล้มเหลว: {type(e).__name__}: {e}"
             )
             return {
                 "symbol": self.symbol,
@@ -351,8 +411,6 @@ class BaseSpecialistAgent(ABC):
                 "session_summary": summary
             }
 
-        # A live bridge can queue a command but never hear back from the EA.
-        # Report that honestly instead of claiming the order is working.
         if order_res.get("confirmed") is False:
             logger.warning(
                 f"{prefix} ORDER UNCONFIRMED: {action} {lot_size} lots {self.symbol} "
@@ -369,11 +427,11 @@ class BaseSpecialistAgent(ABC):
                 "session_summary": summary
             }
 
+        ticket = order_res.get("ticket")
         logger.info(
-            f"{prefix} ORDER PLACED: {action} {lot_size} lots {self.symbol} @ {current_price:.2f} "
-            f"(SL: {sl_candidate}, TP: {tp_candidate}"
-            + (f", ticket: #{order_res.get('ticket')}" if order_res.get("ticket") else "")
-            + ")"
+            f"[3. สั่งซื้อจริง / REAL-ORDER-FILLED] {self.symbol} โบรกเกอร์ยืนยันคำสั่งสำเร็จ! "
+            f"Ticket: #{ticket} | {action} {lot_size} lots @ ${current_price:,.2f} "
+            f"(SL: ${sl_candidate:,.2f}, TP: ${tp_candidate:,.2f})"
         )
         return {
             "symbol": self.symbol,

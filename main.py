@@ -28,6 +28,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S"
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 console = Console()
 
 
@@ -176,7 +178,16 @@ def cmd_bridge(args):
     import uvicorn
     console.print(f"[bold green]Starting MT5 Bridge Server on {config.mt5_host}:{config.mt5_port}...[/bold green]")
     console.print(f"Connected Account: [bold cyan]{config.mt5_login}[/bold cyan] | Server: [bold cyan]{config.mt5_server}[/bold cyan]")
-    uvicorn.run("mt5.bridge_server:app", host=config.mt5_host, port=config.mt5_port, reload=False)
+    uvicorn.run("mt5.bridge_server:app", host=config.mt5_host, port=config.mt5_port, reload=False, access_log=False)
+
+
+def cmd_test_order(args):
+    """Executes full order lifecycle test (BUY, SELL, and CLOSE)."""
+    import test_order
+    if args.mode == "mt5":
+        test_order.run_mt5_live_test()
+    else:
+        test_order.run_paper_test()
 
 
 def main():
@@ -211,6 +222,10 @@ def main():
     
     # Bridge command
     subparsers.add_parser("bridge", help="Run MT5 FastAPI Bridge Server (connects with AgenticMT5Bridge.mq5)")
+
+    # Test-order command
+    to_parser = subparsers.add_parser("test-order", help="Test BUY, SELL and CLOSE order lifecycle")
+    to_parser.add_argument("--mode", default="paper", choices=["paper", "mt5"], help="Execution mode (paper or mt5)")
     
     args = parser.parse_args()
     
@@ -224,6 +239,8 @@ def main():
         cmd_backtest(args)
     elif args.command == "bridge":
         cmd_bridge(args)
+    elif args.command == "test-order":
+        cmd_test_order(args)
     else:
         parser.print_help()
 

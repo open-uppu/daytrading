@@ -17,6 +17,9 @@ services:
       - ./journal:/app/journal
       - ./artifacts:/app/artifacts
       - ./data:/app/data
+      - ./mt5:/app/mt5
+      - ./config.py:/app/config.py
+      - ./main.py:/app/main.py
     command: ["python3", "main.py", "bridge"]
 
   # 2. Multi-Asset Specialist Squad Agent (Gold, BTC, ETH)
@@ -26,7 +29,7 @@ services:
     # Live order generation is opt-in and one-shot by default. Never restart a
     # failed strategy loop and accidentally turn a check into unattended trade.
     profiles: ["live"]
-    restart: "no"
+    restart: unless-stopped
     depends_on:
       - bridge
     env_file:
@@ -39,8 +42,17 @@ services:
       - ./journal:/app/journal
       - ./artifacts:/app/artifacts
       - ./data:/app/data
-    # First live validation is intentionally one specialist and one cycle.
-    command: ["python3", "main.py", "run", "--agent=gold", "--mode=mt5", "--max-iter=1", "--interval=15", "--wait-for-live-data"]
+      - ./agents:/app/agents
+      - ./core:/app/core
+      - ./mt5:/app/mt5
+      - ./mt4:/app/mt4
+      - ./risk:/app/risk
+      - ./learning:/app/learning
+      - ./backtest:/app/backtest
+      - ./main.py:/app/main.py
+      - ./test_order.py:/app/test_order.py
+      - ./config.py:/app/config.py
+    command: ["python3", "main.py", "run", "--agent=all", "--mode=mt5", "--interval=15", "--wait-for-live-data"]
 
   # 3. Standalone Paper Trading (No MT5 needed, runs autonomous simulation)
   paper:

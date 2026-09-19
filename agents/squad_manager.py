@@ -203,6 +203,16 @@ class SquadManager:
                 "specialist_results": {},
             }
 
+        realized_pnl = portfolio_status.get("realized_pnl_usd", 0.0)
+        daily_pct = portfolio_status.get("daily_return_pct", 0.0)
+        logger.info(
+            f"[PORTFOLIO-REAL-FEED] ทุนเริ่มต้น: ${portfolio_status['starting_balance']:,.2f} "
+            f"| Equity ปัจจุบัน: ${portfolio_status['current_equity']:,.2f} "
+            f"| กำไรจริงวันนี้: ${realized_pnl:+.2f} ({daily_pct:+.2f}%) "
+            f"| เป้าหมาย 3%: ${portfolio_status['target_profit_usd']:,.2f} "
+            f"| ไม้ที่เปิดค้าง: {len(self.broker.get_open_positions())} ไม้"
+        )
+
         # Check Portfolio-Level Target Lock
         if portfolio_status["target_reached"]:
             logger.info(f"[Squad Manager] PORTFOLIO 3% TARGET ACHIEVED! (+{portfolio_status['daily_return_pct']:.2f}%). Halting all squad trades.")

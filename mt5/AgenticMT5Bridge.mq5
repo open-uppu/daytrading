@@ -368,7 +368,7 @@ void ExecuteCommand(string json)
          ConfirmExecution(cmdId, "REJECTED", 0, "BUY SL/TP violates broker minimum stop distance");
          return;
       }
-      if(!isBuy && ((sl > 0 && sl > bid - minStopDistance) || (tp > 0 && tp < bid + minStopDistance)))
+      if(!isBuy && ((sl > 0 && sl < bid + minStopDistance) || (tp > 0 && tp > bid - minStopDistance)))
       {
          ConfirmExecution(cmdId, "REJECTED", 0, "SELL SL/TP violates broker minimum stop distance");
          return;

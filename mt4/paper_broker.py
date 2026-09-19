@@ -17,12 +17,18 @@ logger = logging.getLogger("paper_broker")
 class PaperTradingBroker(BaseBroker):
     """Simulates a live broker terminal with realistic Gold market dynamics."""
 
-    def __init__(self, initial_balance: float = 10000.0, symbol: str = "XAUUSD"):
+    def __init__(self, initial_balance: float = 10000.0, symbol: str = "XAUUSD", contract_size: Optional[float] = None):
         self.symbol = symbol
         self.balance: float = initial_balance
         self.equity: float = initial_balance
         self.spread: float = config.spread_points  # 0.25 on gold
-        self.contract_size: float = config.contract_size  # 100
+        if contract_size is not None:
+            self.contract_size = contract_size
+        elif any(c in symbol.upper() for c in ["BTC", "ETH"]):
+            self.contract_size = 1.0
+        else:
+            self.contract_size = config.contract_size  # 100.0
+
         
         self.next_ticket: int = 100001
         self.open_positions: Dict[int, Dict[str, Any]] = {}
