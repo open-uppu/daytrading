@@ -395,15 +395,42 @@ class BaseSpecialistAgent(ABC):
         )
 
         if action not in ["BUY", "SELL"]:
-            return {
-                "symbol": self.symbol,
-                "asset": self.asset_name,
-                "iteration": self.iteration_count,
-                "status": "WAITING_FOR_SETUP",
-                "action": "HOLD",
-                "signal": signal,
-                "session_summary": summary
-            }
+            # Cadence Pacer: Guarantee at least 1 order every 10 minutes (600s) on active market
+            can_pacer = (
+                getattr(config, "cadence_pacer_enabled", True)
+                and len(symbol_positions) < self.max_open_positions
+            )
+            elapsed = (datetime.now() - self.last_entry_time).total_seconds() if self.last_entry_time else 999999
+            # Market must be actively ticking (exclude flat/closed weekend forex)
+            is_market_active = (len(df_main) >= 5) and (df_main['close'].iloc[-1] != df_main['close'].iloc[-5])
+
+            if can_pacer and elapsed >= self.min_entry_interval_sec and is_market_active:
+                if current_price >= htf_ema_200:
+                    action = "BUY"
+                    sl_candidate = round(current_price - (1.5 * atr), 2)
+                    tp_candidate = round(current_price + (3.0 * atr), 2)
+                    reason = f"{self.symbol} M5 10-Min Cadence Entry (Macro Bullish)"
+                else:
+                    action = "SELL"
+                    sl_candidate = round(current_price + (1.5 * atr), 2)
+                    tp_candidate = round(current_price - (3.0 * atr), 2)
+                    reason = f"{self.symbol} M5 10-Min Cadence Entry (Macro Bearish)"
+
+                signal = {"action": action, "sl": sl_candidate, "tp": tp_candidate, "reason": reason, "signal_type": "CADENCE_PACER"}
+                logger.info(
+                    f"[⏱️ CADENCE-PACER] {self.symbol} ครบกำหนด 10 นาที (Cadence {self.min_entry_interval_sec}s) "
+                    f"-> ออกออเดอร์ตามเทรนด์ M5 ทันที: {action} (SL: ${sl_candidate:,.2f}, TP: ${tp_candidate:,.2f})"
+                )
+            else:
+                return {
+                    "symbol": self.symbol,
+                    "asset": self.asset_name,
+                    "iteration": self.iteration_count,
+                    "status": "WAITING_FOR_SETUP",
+                    "action": "HOLD",
+                    "signal": signal,
+                    "session_summary": summary
+                }
 
         # 7b. Multi-Timeframe Macro Trend Alignment Gating
         if self.timeframe == "M5" and config.timeframe_htf:
@@ -465,15 +492,18 @@ class BaseSpecialistAgent(ABC):
 
         # 8b. Machine Learning Meta-Labeling Confidence Gate
         if getattr(config, "ml_filter_enabled", True):
+            is_cadence = (signal.get("signal_type") == "CADENCE_PACER")
+            default_thresh = getattr(config, "ml_confidence_threshold", 0.75)
+            ml_threshold = 0.65 if is_cadence else default_thresh
             ml_passed, ml_conf, ml_details = self.ml_filter.evaluate_proposal(
                 signal=signal,
                 df_window=df_main,
                 asset_symbol=self.symbol,
-                custom_threshold=getattr(config, "ml_confidence_threshold", 0.75)
+                custom_threshold=ml_threshold
             )
             logger.info(
                 f"[2. คิดวิเคราะห์จริง / ML-GATE] {self.symbol} ML Win Probability: {ml_conf:.1%} "
-                f"(Threshold: {config.ml_confidence_threshold:.1%}) -> {'✅ ผ่านเงื่อนไข (PASS)' if ml_passed else '❌ ต่ำกว่าเกณฑ์ความมั่นใจ (VETOED)'}"
+                f"(Threshold: {ml_threshold:.1%}) -> {'✅ ผ่านเงื่อนไข (PASS)' if ml_passed else '❌ ต่ำกว่าเกณฑ์ความมั่นใจ (VETOED)'}"
             )
             if not ml_passed:
                 return {
@@ -481,7 +511,7 @@ class BaseSpecialistAgent(ABC):
                     "asset": self.asset_name,
                     "iteration": self.iteration_count,
                     "status": "VETOED_BY_ML_CONFIDENCE",
-                    "reason": f"ML Confidence {ml_conf:.1%} below threshold {config.ml_confidence_threshold:.1%}",
+                    "reason": f"ML Confidence {ml_conf:.1%} below threshold {ml_threshold:.1%}",
                     "session_summary": summary
                 }
 
@@ -543,6 +573,7 @@ class BaseSpecialistAgent(ABC):
             }
 
         if order_res.get("confirmed") is False:
+            self.last_entry_time = datetime.now()
             logger.warning(
                 f"{prefix} ORDER UNCONFIRMED: {action} {lot_size} lots {self.symbol} "
                 f"queued as {order_res.get('command_id')} but the EA did not confirm. "

@@ -24,6 +24,8 @@ class TradingConfig(BaseSettings):
     trailing_be_trigger_r: float = 0.80 # Move SL to Breakeven when trade reaches +0.8R
     ml_filter_enabled: bool = True   # Enable ML Meta-Labeling confidence filter
     ml_confidence_threshold: float = 0.75 # Confidence threshold (0.75 - 0.85)
+    cadence_pacer_enabled: bool = True # Ensures at least 1 order every 10 minutes per active asset
+    min_entry_interval_sec: int = 600  # 10-minute cadence interval (600 seconds)
     
     # Gold specific contract details
     contract_size: float = 100.0     # 1 standard lot = 100 oz

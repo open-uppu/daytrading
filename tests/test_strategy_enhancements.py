@@ -12,6 +12,7 @@ import pandas as pd
 
 from config import config
 from agents.gold_agent import GoldSpecialistAgent
+from agents.btc_agent import BtcSpecialistAgent
 from agents.squad_manager import SquadManager
 from mt4.paper_broker import PaperTradingBroker
 
@@ -116,3 +117,42 @@ def test_squad_manager_duo_preset():
     assert "btc" in squad.specialists
     assert "eth" not in squad.specialists
     assert len(squad.specialists) == 2
+
+
+def test_cadence_pacer_periodic_entry():
+    """Validates that Cadence Pacer initiates a trend trade when 10 minutes have elapsed."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        agent = BtcSpecialistAgent(
+            broker_mode="paper",
+            initial_balance=10000.0,
+            journal_dir=Path(tmp_dir),
+            timeframe="M5",
+            min_entry_interval_sec=600
+        )
+        # Force evaluate_strategy_signal to return HOLD
+        agent.evaluate_strategy_signal = lambda df: {"action": "HOLD"}
+        
+        # Create active trending market data
+        n = 60
+        prices = [80000.0 + i * 10 for i in range(n)]
+        mock_df = pd.DataFrame({
+            "timestamp": pd.date_range("2026-08-01 10:00", periods=n, freq="5min"),
+            "open": prices,
+            "high": [p + 5 for p in prices],
+            "low": [p - 5 for p in prices],
+            "close": prices,
+            "volume": [100] * n
+        })
+        agent.broker.get_market_data = lambda symbol, timeframe="M5", bars=60: mock_df.copy()
+        
+        # 1. First run with no previous entries -> should fire Cadence Pacer order
+        result = agent.step()
+        assert result["status"] == "ORDER_PLACED"
+        assert result["symbol"] == "BTCUSD"
+        assert result["order"]["ticket"] is not None
+        assert agent.last_entry_time is not None
+        
+        # 2. Immediate second step -> should be blocked by 10-minute cadence cooldown
+        result2 = agent.step()
+        assert result2["status"] == "MONITORING_POSITION"
+        assert "cooldown" in result2.get("reason", "").lower()

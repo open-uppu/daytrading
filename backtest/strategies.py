@@ -392,54 +392,81 @@ def strategy_m5_scalper(window: pd.DataFrame, current_idx: int = -1, asset_type:
         return {"action": "HOLD"}
 
     # -------------------------------------------------------------
-    # 2. Bitcoin (BTCUSD) M5 Scalper: Momentum Cross with Macro Trend
+    # 2. Bitcoin (BTCUSD) M5 Scalper: Momentum Cross & Trend Pullback
     # -------------------------------------------------------------
     elif "btc" in asset:
         sl_dist = max(1.5 * atr, 25.0)
         tp_dist = round(3.0 * atr, 2)
 
-        bullish_cross = (prev_20 <= prev_50) and (ema_20 > ema_50)
-        if bullish_cross and close_p > ema_200 and 42.0 <= rsi <= 68.0:
+        bullish_cross = ((prev_20 <= prev_50) and (ema_20 > ema_50)) or ((prev_9 <= prev_21) and (ema_9 > ema_21))
+        bullish_pullback = (
+            (ema_20 > ema_50) and (close_p > ema_200) and
+            (abs(close_p - ema_9) <= 1.0 * atr or abs(close_p - ema_20) <= 1.0 * atr) and
+            (patterns['is_bullish'] or patterns['lower_wick_ratio'] >= 0.25 or patterns['bullish_pin'])
+        )
+        if (bullish_cross or bullish_pullback) and close_p > ema_200 and 40.0 <= rsi <= 70.0:
             sl = round(close_p - sl_dist, 2)
             tp = round(close_p + tp_dist, 2)
-            return {"action": "BUY", "sl": sl, "tp": tp, "reason": "BTC M5 MTF Momentum Cross Buy", "signal_type": "CROSS"}
+            reason = "BTC M5 MTF Momentum Cross Buy" if bullish_cross else "BTC M5 Trend Pullback Buy"
+            return {"action": "BUY", "sl": sl, "tp": tp, "reason": reason, "signal_type": "CROSS" if bullish_cross else "PULLBACK"}
 
-        bearish_cross = (prev_20 >= prev_50) and (ema_20 < ema_50)
-        if bearish_cross and close_p < ema_200 and 32.0 <= rsi <= 58.0:
+        bearish_cross = ((prev_20 >= prev_50) and (ema_20 < ema_50)) or ((prev_9 >= prev_21) and (ema_9 < ema_21))
+        bearish_pullback = (
+            (ema_20 < ema_50) and (close_p < ema_200) and
+            (abs(close_p - ema_9) <= 1.0 * atr or abs(close_p - ema_20) <= 1.0 * atr) and
+            (not patterns['is_bullish'] or patterns['upper_wick_ratio'] >= 0.25 or patterns['bearish_pin'])
+        )
+        if (bearish_cross or bearish_pullback) and close_p < ema_200 and 30.0 <= rsi <= 60.0:
             sl = round(close_p + sl_dist, 2)
             tp = round(close_p - tp_dist, 2)
-            return {"action": "SELL", "sl": sl, "tp": tp, "reason": "BTC M5 MTF Momentum Cross Sell", "signal_type": "CROSS"}
+            reason = "BTC M5 MTF Momentum Cross Sell" if bearish_cross else "BTC M5 Trend Pullback Sell"
+            return {"action": "SELL", "sl": sl, "tp": tp, "reason": reason, "signal_type": "CROSS" if bearish_cross else "PULLBACK"}
 
         return {"action": "HOLD"}
 
     # -------------------------------------------------------------
-    # 3. Ethereum (ETHUSD) M5 Scalper: Statistical Mean Reversion
+    # 3. Ethereum (ETHUSD) M5 Scalper: Statistical Mean Reversion & Pullback
     # -------------------------------------------------------------
     elif "eth" in asset:
         rolling_mean = df['close'].rolling(20).mean()
         rolling_std = df['close'].rolling(20).std()
-        upper_bb = rolling_mean + (rolling_std * 2.2)
-        lower_bb = rolling_mean - (rolling_std * 2.2)
+        upper_bb = rolling_mean + (rolling_std * 2.0)
+        lower_bb = rolling_mean - (rolling_std * 2.0)
 
         curr_lower = float(lower_bb.iloc[-1])
         curr_upper = float(upper_bb.iloc[-1])
         curr_mid = float(rolling_mean.iloc[-1])
 
         sl_dist = max(1.5 * atr, 2.0)
+        tp_dist = round(3.0 * atr, 2)
 
-        # Buy oversold extreme
-        if close_p <= curr_lower + (0.2 * atr) and rsi <= 25.0:
+        # Bullish: BB Lower bounce OR EMA Pullback in uptrend
+        bb_bounce = (close_p <= curr_lower + (0.3 * atr)) and rsi <= 35.0
+        bullish_pullback = (
+            (ema_20 > ema_50) and (close_p > ema_200) and
+            (abs(close_p - ema_20) <= 1.0 * atr) and
+            (patterns['is_bullish'] or patterns['lower_wick_ratio'] >= 0.25) and
+            (40.0 <= rsi <= 65.0)
+        )
+        if bb_bounce or bullish_pullback:
             sl = round(close_p - sl_dist, 2)
-            tp = round(curr_mid, 2)
-            if (tp - close_p) >= 1.2 * (close_p - sl):
-                return {"action": "BUY", "sl": sl, "tp": tp, "reason": "ETH M5 BB Lower Band Bounce", "signal_type": "REVERSION"}
+            tp = round(close_p + tp_dist, 2)
+            reason = "ETH M5 BB Lower Band Bounce" if bb_bounce else "ETH M5 Trend Pullback Buy"
+            return {"action": "BUY", "sl": sl, "tp": tp, "reason": reason, "signal_type": "REVERSION" if bb_bounce else "PULLBACK"}
 
-        # Sell overbought extreme
-        elif close_p >= curr_upper - (0.2 * atr) and rsi >= 75.0:
+        # Bearish: BB Upper reject OR EMA Pullback in downtrend
+        bb_reject = (close_p >= curr_upper - (0.3 * atr)) and rsi >= 65.0
+        bearish_pullback = (
+            (ema_20 < ema_50) and (close_p < ema_200) and
+            (abs(close_p - ema_20) <= 1.0 * atr) and
+            (not patterns['is_bullish'] or patterns['upper_wick_ratio'] >= 0.25) and
+            (35.0 <= rsi <= 60.0)
+        )
+        if bb_reject or bearish_pullback:
             sl = round(close_p + sl_dist, 2)
-            tp = round(curr_mid, 2)
-            if (close_p - tp) >= 1.2 * (sl - close_p):
-                return {"action": "SELL", "sl": sl, "tp": tp, "reason": "ETH M5 BB Upper Band Reject", "signal_type": "REVERSION"}
+            tp = round(close_p - tp_dist, 2)
+            reason = "ETH M5 BB Upper Band Reject" if bb_reject else "ETH M5 Trend Pullback Sell"
+            return {"action": "SELL", "sl": sl, "tp": tp, "reason": reason, "signal_type": "REVERSION" if bb_reject else "PULLBACK"}
 
         return {"action": "HOLD"}
 
