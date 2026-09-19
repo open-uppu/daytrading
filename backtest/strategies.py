@@ -9,6 +9,7 @@ import numpy as np
 
 from core.indicators import (
     compute_all_indicators,
+    compute_ema,
     detect_support_resistance,
     analyze_candlestick_patterns
 )
@@ -310,3 +311,123 @@ def strategy_optimal_hybrid(window: pd.DataFrame, current_idx: int) -> Dict[str,
                 return {"action": "SELL", "sl": sl, "tp": tp, "reason": "Optimal Hybrid Bearish Rejection"}
 
     return {"action": "HOLD"}
+
+
+# =====================================================================
+# Strategy F: M5 High-Frequency Scalper Engine (Gold, BTC, ETH)
+# =====================================================================
+def strategy_m5_scalper(window: pd.DataFrame, current_idx: int = -1, asset_type: str = "gold") -> Dict[str, Any]:
+    """
+    High-Frequency M5 Scalper:
+    Targets consistent entries (~every 10 minutes / 2 M5 candles during active setups)
+    using a multi-trigger engine:
+      1. Micro-Momentum EMA 9/21 Pullback Bounce/Rejection
+      2. Micro Range Breakout (5-bar swing breaks)
+      3. Fast EMA 9/21 Golden / Death Cross
+    Equipped with asset-tailored tight ATR Stop-Loss and Take-Profit.
+    """
+    if len(window) < 30:
+        return {"action": "HOLD"}
+
+    # Compute indicators on window
+    df = compute_all_indicators(window.tail(40))
+    df['ema_9'] = compute_ema(df['close'], 9)
+    df['ema_21'] = compute_ema(df['close'], 21)
+
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
+
+    close_p = float(latest['close'])
+    high_p = float(latest['high'])
+    low_p = float(latest['low'])
+    ema_9 = float(latest['ema_9'])
+    ema_21 = float(latest['ema_21'])
+    ema_50 = float(latest['ema_50'])
+    ema_200 = float(latest['ema_200'])
+    atr = max(float(latest['atr_14']), 0.1)
+    rsi = float(latest['rsi_14'])
+
+    prev_ema_9 = float(prev['ema_9'])
+    prev_ema_21 = float(prev['ema_21'])
+
+    patterns = analyze_candlestick_patterns(latest, prev)
+
+    # Tailor ATR multipliers and minimum SL per asset
+    asset = asset_type.lower()
+    if "gold" in asset or "xau" in asset:
+        sl_mult = 1.0
+        tp_mult = 1.5
+        min_sl = 0.80
+        round_digits = 2
+    elif "btc" in asset:
+        sl_mult = 1.2
+        tp_mult = 1.8
+        min_sl = 25.0
+        round_digits = 2
+    elif "eth" in asset:
+        sl_mult = 1.2
+        tp_mult = 1.8
+        min_sl = 2.0
+        round_digits = 2
+    else:
+        sl_mult = 1.0
+        tp_mult = 1.5
+        min_sl = 1.0
+        round_digits = 2
+
+    sl_dist = max(sl_mult * atr, min_sl)
+    tp_dist = max(tp_mult * atr, min_sl * 1.5)
+
+    # 5-bar swing high / low for micro-breakout
+    recent_5 = df.iloc[-6:-1]
+    swing_high_5 = float(recent_5['high'].max()) if len(recent_5) >= 5 else high_p
+    swing_low_5 = float(recent_5['low'].min()) if len(recent_5) >= 5 else low_p
+
+    # --- Trigger 1: Fast EMA 9/21 Cross ---
+    bullish_cross = (prev_ema_9 <= prev_ema_21) and (ema_9 > ema_21)
+    bearish_cross = (prev_ema_9 >= prev_ema_21) and (ema_9 < ema_21)
+
+    if bullish_cross and 40.0 <= rsi <= 70.0:
+        sl = round(close_p - sl_dist, round_digits)
+        tp = round(close_p + tp_dist, round_digits)
+        return {"action": "BUY", "sl": sl, "tp": tp, "reason": "M5 Scalp: EMA 9/21 Golden Cross", "signal_type": "CROSS"}
+
+    if bearish_cross and 30.0 <= rsi <= 60.0:
+        sl = round(close_p + sl_dist, round_digits)
+        tp = round(close_p - tp_dist, round_digits)
+        return {"action": "SELL", "sl": sl, "tp": tp, "reason": "M5 Scalp: EMA 9/21 Death Cross", "signal_type": "CROSS"}
+
+    # --- Trigger 2: Micro-Momentum Pullback & Bounce ---
+    dist_to_ema9 = abs(close_p - ema_9)
+    dist_to_ema21 = abs(close_p - ema_21)
+    near_fast_ema = (dist_to_ema9 <= 0.9 * atr) or (dist_to_ema21 <= 0.9 * atr)
+
+    # Bullish Trend Alignment (EMA 9 >= EMA 21)
+    if ema_9 >= ema_21 and close_p >= ema_21 - (0.3 * atr):
+        # Pullback bounce: lower wick rejection or bullish candle near EMA
+        if near_fast_ema and (patterns['is_bullish'] or patterns['lower_wick_ratio'] >= 0.35) and 38.0 <= rsi <= 68.0:
+            sl = round(close_p - sl_dist, round_digits)
+            tp = round(close_p + tp_dist, round_digits)
+            return {"action": "BUY", "sl": sl, "tp": tp, "reason": "M5 Scalp: EMA Pullback Bounce", "signal_type": "PULLBACK"}
+
+    # Bearish Trend Alignment (EMA 9 <= EMA 21)
+    if ema_9 <= ema_21 and close_p <= ema_21 + (0.3 * atr):
+        # Pullback rejection: upper wick rejection or bearish candle near EMA
+        if near_fast_ema and (not patterns['is_bullish'] or patterns['upper_wick_ratio'] >= 0.35) and 32.0 <= rsi <= 62.0:
+            sl = round(close_p + sl_dist, round_digits)
+            tp = round(close_p - tp_dist, round_digits)
+            return {"action": "SELL", "sl": sl, "tp": tp, "reason": "M5 Scalp: EMA Pullback Rejection", "signal_type": "PULLBACK"}
+
+    # --- Trigger 3: Micro Range Breakout ---
+    if close_p > swing_high_5 and rsi >= 52.0 and close_p > ema_21:
+        sl = round(close_p - sl_dist, round_digits)
+        tp = round(close_p + tp_dist, round_digits)
+        return {"action": "BUY", "sl": sl, "tp": tp, "reason": "M5 Scalp: Micro Breakout", "signal_type": "BREAKOUT"}
+
+    if close_p < swing_low_5 and rsi <= 48.0 and close_p < ema_21:
+        sl = round(close_p + sl_dist, round_digits)
+        tp = round(close_p - tp_dist, round_digits)
+        return {"action": "SELL", "sl": sl, "tp": tp, "reason": "M5 Scalp: Micro Breakdown", "signal_type": "BREAKOUT"}
+
+    return {"action": "HOLD"}
+
