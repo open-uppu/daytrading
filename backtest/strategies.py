@@ -142,6 +142,37 @@ def strategy_bb_reversion(window: pd.DataFrame, current_idx: int) -> Dict[str, A
 
 
 # =====================================================================
+# Strategy G (research candidate, shadow-log only): BB 2.5σ Extreme Reversion
+# =====================================================================
+def strategy_bb_extreme(window: pd.DataFrame, current_idx: int = -1) -> Dict[str, Any]:
+    """BB(20, 2.5σ) + RSI<=20 / >=80 reversion, TP 1.0 ATR / SL 1.4 ATR. Raw signal has ~0 edge (see scratch/audit_strategy_g_*.py)."""
+    if len(window) < 30:
+        return {"action": "HOLD"}
+
+    df = compute_all_indicators(window.tail(60).copy())
+    mean = df['close'].rolling(20).mean().iloc[-1]
+    std = df['close'].rolling(20).std().iloc[-1]
+    close_p = float(df['close'].iloc[-1])
+    atr = max(float(df['atr_14'].iloc[-1]), 0.1)
+    rsi = float(df['rsi_14'].iloc[-1])
+
+    if close_p <= mean - 2.5 * std + 0.2 * atr and rsi <= 20.0:
+        action, sign = "BUY", 1
+    elif close_p >= mean + 2.5 * std - 0.2 * atr and rsi >= 80.0:
+        action, sign = "SELL", -1
+    else:
+        return {"action": "HOLD"}
+
+    return {
+        "action": action,
+        "sl": round(close_p - sign * 1.4 * atr, 2),
+        "tp": round(close_p + sign * 1.0 * atr, 2),
+        "close": close_p, "atr": atr, "rsi": rsi,
+        "reason": "BB 2.5σ Extreme Reversion",
+    }
+
+
+# =====================================================================
 # Strategy D: Multi-Timeframe Momentum & Trend Alignment
 # =====================================================================
 def strategy_mtf_momentum(window: pd.DataFrame, current_idx: int) -> Dict[str, Any]:
