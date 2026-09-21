@@ -180,10 +180,10 @@ class PaperTradingBroker(BaseBroker):
         """Returns closed orders history."""
         return self.closed_orders
 
-    def consume_recently_closed(self) -> List[Dict[str, Any]]:
-        """Pops and returns closed orders that haven't been reflected upon yet."""
-        recent = list(self.recently_closed_orders)
-        self.recently_closed_orders.clear()
+    def consume_recently_closed(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Pops and returns closed orders that haven't been reflected upon yet (only `symbol`'s when given)."""
+        recent = [o for o in self.recently_closed_orders if not symbol or o.get("symbol") == symbol]
+        self.recently_closed_orders[:] = [o for o in self.recently_closed_orders if o not in recent]
         return recent
 
     def simulate_price_update(self, new_high: float, new_low: float, new_close: float) -> None:

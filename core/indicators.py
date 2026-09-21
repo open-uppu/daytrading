@@ -149,6 +149,8 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     if 'close' not in df.columns:
         raise ValueError("DataFrame must contain 'close' column")
         
+    df['ema_9'] = compute_ema(df['close'], 9)
+    df['ema_21'] = compute_ema(df['close'], 21)
     df['ema_20'] = compute_ema(df['close'], 20)
     df['ema_50'] = compute_ema(df['close'], 50)
     df['ema_200'] = compute_ema(df['close'], 200)

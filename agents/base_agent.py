@@ -13,11 +13,11 @@ import pandas as pd
 from config import config
 from mt4.broker_interface import BaseBroker
 from mt4.paper_broker import PaperTradingBroker
-from mt5.bridge_server import MT5BridgeBroker
+from mt5.bridge_server import MT5BridgeBroker, MarketDataStale
 from mt4.bridge_server import MT4BridgeBroker
 from risk.manager import DailySessionTracker, RiskManager
 from core.chart_generator import generate_candlestick_chart
-from core.indicators import compute_all_indicators
+from core.indicators import compute_all_indicators, analyze_candlestick_patterns
 from core.vision_analyzer import VisionAnalyzer
 from core.ml_filter import MLQuantFilter
 from learning.reflector import TradeReflector, PreTradeFilter, TradeOutcome
@@ -121,6 +121,9 @@ class BaseSpecialistAgent(ABC):
         self.iteration_count: int = 0
         self.known_closed_tickets: set = set()
         self.trailed_tickets: set = set()
+        self.position_open_times: Dict[int, datetime] = {}
+        self.exit_reasons: Dict[int, str] = {}
+        self.be_sl_levels: Dict[int, float] = {}
 
     @property
     @abstractmethod
@@ -139,7 +142,7 @@ class BaseSpecialistAgent(ABC):
     def _reconcile_closed_trades(self) -> None:
         """Checks for newly closed trades, logs autopsies, and updates learned rules."""
         if hasattr(self.broker, "consume_recently_closed"):
-            closed_trades = self.broker.consume_recently_closed()
+            closed_trades = self.broker.consume_recently_closed(symbol=self.symbol)
         elif hasattr(self.broker, "get_closed_orders"):
             closed_trades = self.broker.get_closed_orders()
         elif hasattr(self.broker, "get_trade_history"):
@@ -154,6 +157,10 @@ class BaseSpecialistAgent(ABC):
                 continue
             if ticket not in self.known_closed_tickets:
                 self.known_closed_tickets.add(ticket)
+                # Pop agent-side exit telemetry first so incomplete broker records
+                # (which skip the autopsy below) cannot leave stale entries behind.
+                smart_reason = self.exit_reasons.pop(ticket, None)
+                be_level = self.be_sl_levels.pop(ticket, None)
                 pnl = t.get("profit", t.get("pnl_usd", 0.0))
                 self.session_tracker.record_closed_trade(pnl)
                 current_bal = self.session_tracker.starting_balance + self.session_tracker.closed_pnl_today
@@ -178,7 +185,25 @@ class BaseSpecialistAgent(ABC):
                         self.symbol, ticket, ", ".join(missing),
                     )
                     continue
-                
+
+                # Resolve the TRUE exit reason instead of guessing from the sign of the PnL.
+                broker_reason = t.get("exit_reason")
+                close_p = t["close_price"]
+                tp_p = t.get("tp") or 0.0
+                # A trailed ticket has its SL parked at be_level, so it either stopped there or
+                # ran to TP. Whichever level the close landed nearer to is what happened — the
+                # paper broker reports its own stop-out as a plain "SL_HIT".
+                stopped_at_be = bool(be_level) and (not tp_p or abs(close_p - be_level) < abs(close_p - tp_p))
+
+                if smart_reason:
+                    resolved_exit = smart_reason
+                elif stopped_at_be:
+                    resolved_exit = "BE_STOP"
+                elif broker_reason and broker_reason != "MANUAL_CLOSE":
+                    resolved_exit = broker_reason
+                else:
+                    resolved_exit = "TP_HIT" if pnl > 0 else "SL_HIT"
+
                 # Perform post-trade autopsy & learning
                 outcome = TradeOutcome(
                     ticket=ticket,
@@ -193,7 +218,7 @@ class BaseSpecialistAgent(ABC):
                     tp_price=t.get("tp", 0.0),
                     pnl_usd=pnl,
                     pnl_pct=round((pnl / self.session_tracker.starting_balance) * 100, 2),
-                    exit_reason=t.get("exit_reason", "TP_HIT" if pnl > 0 else "SL_HIT"),
+                    exit_reason=resolved_exit,
                     confluence_score=75.0,
                     pattern_detected=self.strategy_name,
                     ema_200=t.get("open_price", 0.0),
@@ -206,21 +231,40 @@ class BaseSpecialistAgent(ABC):
                     f"รหัสชันสูตร: {res['diagnosis_code']} ➔ ไฟล์: {res['autopsy_path']}"
                 )
 
-    def _manage_active_position(self, pos: Dict[str, Any]) -> None:
-        """Monitors real open position in the market and executes dynamic trailing break-even."""
+    def _manage_active_position(self, pos: Dict[str, Any], df_main: Optional[pd.DataFrame] = None) -> bool:
+        """
+        Monitors real open position in the market:
+        1. Executes Dynamic Trailing Break-Even (+0.50R trigger).
+        2. Executes Smart Profit Exit (Opposite Signal, Wick Rejection, Band Touch, Stagnation)
+           STRICTLY when net profit > 0, closing the position before hitting hard TP/SL.
+        Returns: True if position was closed, False otherwise.
+        """
         ticket = pos.get("ticket")
         p_type = pos.get("type", "UNKNOWN")
         lots = pos.get("lots", 0.0)
         open_price = float(pos.get("open_price", 0.0))
         sl = float(pos.get("sl", 0.0))
         tp = float(pos.get("tp", 0.0))
-        profit = float(pos.get("profit", 0.0))
         bid = float(pos.get("bid", 0.0))
         ask = float(pos.get("ask", 0.0))
         current_p = bid if p_type == "BUY" else ask
         if current_p <= 0.0:
-            current_p = open_price
+            if df_main is not None and len(df_main) > 0:
+                current_p = float(df_main['close'].iloc[-1])
+            elif hasattr(self.broker, "current_price"):
+                current_p = float(self.broker.current_price)
+            else:
+                current_p = open_price
+
+        # Accurate profit calculation across Live MT5 and Paper brokers
+        calc_profit = (current_p - open_price) * lots * self.contract_size if p_type == "BUY" else (open_price - current_p) * lots * self.contract_size
+        profit = float(pos.get("profit", pos.get("unrealized_pnl", calc_profit)))
         
+        # Track holding duration
+        if ticket and ticket not in self.position_open_times:
+            self.position_open_times[ticket] = datetime.now()
+        held_sec = (datetime.now() - self.position_open_times[ticket]).total_seconds() if ticket else 0.0
+
         logger.info(
             f"[มอนิเตอร์ออเดอร์จริง / REAL-POSITION] {self.symbol} Ticket #{ticket} ({p_type} {lots} lots) "
             f"| ราคาเข้า: {open_price:,.2f} ➔ ราคาสดตลาด: {current_p:,.2f} "
@@ -228,10 +272,10 @@ class BaseSpecialistAgent(ABC):
             f"| กำไรลอยตัว (Floating PnL): ${profit:+.2f}"
         )
 
-        # Dynamic Trailing Break-Even (+0.8R to +1.0R Trigger)
+        # 1. Dynamic Trailing Break-Even (+0.50R Trigger)
         if getattr(config, "trailing_be_enabled", True) and ticket and ticket not in self.trailed_tickets and open_price > 0:
             sl_dist = abs(open_price - sl) if sl > 0 else (self.min_sl_dist * 1.5)
-            trigger_dist = sl_dist * getattr(config, "trailing_be_trigger_r", 0.80)
+            trigger_dist = sl_dist * getattr(config, "trailing_be_trigger_r", 0.50)
             spread = config.spread_points if "XAU" in self.symbol else (15.0 if "BTC" in self.symbol else 1.0)
             
             if p_type == "BUY":
@@ -241,6 +285,7 @@ class BaseSpecialistAgent(ABC):
                     try:
                         self.broker.modify_order(ticket=ticket, sl=new_sl, tp=tp)
                         self.trailed_tickets.add(ticket)
+                        self.be_sl_levels[ticket] = new_sl
                         logger.info(
                             f"[🎯 DYNAMIC-BE-ACTIVE] {self.symbol} Ticket #{ticket} กำไรบวกแตะ +${profit_dist:,.2f} "
                             f"(>= เป้าหมาย Trailing +${trigger_dist:,.2f}) -> เลื่อน SL มาบังหน้าทุนที่ ${new_sl:,.2f} สำเร็จ (ตัดความเสี่ยงขาดทุน 100%)!"
@@ -255,12 +300,112 @@ class BaseSpecialistAgent(ABC):
                     try:
                         self.broker.modify_order(ticket=ticket, sl=new_sl, tp=tp)
                         self.trailed_tickets.add(ticket)
+                        self.be_sl_levels[ticket] = new_sl
                         logger.info(
                             f"[🎯 DYNAMIC-BE-ACTIVE] {self.symbol} Ticket #{ticket} กำไรบวกแตะ +${profit_dist:,.2f} "
                             f"(>= เป้าหมาย Trailing +${trigger_dist:,.2f}) -> เลื่อน SL มาบังหน้าทุนที่ ${new_sl:,.2f} สำเร็จ (ตัดความเสี่ยงขาดทุน 100%)!"
                         )
                     except Exception as e:
                         logger.warning(f"{self.symbol} Trailing modify failed for #{ticket}: {e}")
+
+        # 2. Smart Profit Exit Engine (Active early profit-taking without waiting for TP/SL lines)
+        smart_exit_enabled = getattr(config, "smart_exit_enabled", True)
+        min_profit_usd = getattr(config, "smart_exit_min_profit_usd", 0.20)
+        
+        # STRICT CONSTRAINT: Must be in profit (> 0 and >= min_profit_usd)
+        if smart_exit_enabled and profit >= min_profit_usd and ticket:
+            if df_main is None:
+                try:
+                    df_main = self.broker.get_market_data(symbol=self.symbol, timeframe=self.timeframe, bars=30)
+                except Exception:
+                    df_main = None
+
+            if df_main is not None and len(df_main) >= 20:
+                try:
+                    df_ind = compute_all_indicators(df_main)
+                    last_row = df_ind.iloc[-1]
+                    prev_row = df_ind.iloc[-2]
+                    
+                    curr_close = float(last_row['close'])
+                    curr_ema9 = float(last_row.get('ema_9', curr_close))
+                    curr_ema21 = float(last_row.get('ema_21', curr_close))
+                    curr_ema50 = float(last_row.get('ema_50', curr_close))
+                    prev_ema9 = float(prev_row.get('ema_9', curr_close))
+                    prev_ema21 = float(prev_row.get('ema_21', curr_close))
+                    rsi = float(last_row.get('rsi_14', 50.0))
+                    
+                    rm = df_ind['close'].rolling(20).mean()
+                    rstd = df_ind['close'].rolling(20).std()
+                    upper_bb = float(rm.iloc[-1] + (rstd.iloc[-1] * 2.0))
+                    lower_bb = float(rm.iloc[-1] - (rstd.iloc[-1] * 2.0))
+                    
+                    candle_p = analyze_candlestick_patterns(last_row, prev_row)
+                    
+                    should_close = False
+                    exit_reason = ""
+                    
+                    # A. Opposite Technical Signal
+                    if p_type == "BUY":
+                        if (prev_ema9 >= prev_ema21 and curr_ema9 < curr_ema21) or (curr_close < curr_ema50):
+                            should_close = True
+                            exit_reason = "Opposite Signal (Bearish EMA Cross / Breakdown under EMA 50)"
+                        elif rsi >= 70.0 and (last_row['close'] < last_row['open']):
+                            should_close = True
+                            exit_reason = f"RSI Overbought Reversal (RSI: {rsi:.1f})"
+                    elif p_type == "SELL":
+                        if (prev_ema9 <= prev_ema21 and curr_ema9 > curr_ema21) or (curr_close > curr_ema50):
+                            should_close = True
+                            exit_reason = "Opposite Signal (Bullish EMA Cross / Breakout above EMA 50)"
+                        elif rsi <= 30.0 and (last_row['close'] > last_row['open']):
+                            should_close = True
+                            exit_reason = f"RSI Oversold Reversal (RSI: {rsi:.1f})"
+                    
+                    # B. Wick Rejection / Momentum Stall Exit
+                    if not should_close:
+                        wick_thresh = getattr(config, "smart_exit_wick_threshold", 0.35)
+                        if p_type == "BUY" and (candle_p.get("upper_wick_ratio", 0.0) >= wick_thresh or candle_p.get("bearish_pin", False)):
+                            should_close = True
+                            exit_reason = f"Upper Wick Rejection ({candle_p.get('upper_wick_ratio', 0.0)*100:.0f}%)"
+                        elif p_type == "SELL" and (candle_p.get("lower_wick_ratio", 0.0) >= wick_thresh or candle_p.get("bullish_pin", False)):
+                            should_close = True
+                            exit_reason = f"Lower Wick Rejection ({candle_p.get('lower_wick_ratio', 0.0)*100:.0f}%)"
+                    
+                    # C. Bollinger Band Extreme Touch Exit
+                    if not should_close and upper_bb > 0:
+                        if p_type == "BUY" and current_p >= upper_bb:
+                            should_close = True
+                            exit_reason = f"Upper Bollinger Band Touch ({current_p:,.2f} >= {upper_bb:,.2f})"
+                        elif p_type == "SELL" and current_p <= lower_bb:
+                            should_close = True
+                            exit_reason = f"Lower Bollinger Band Touch ({current_p:,.2f} <= {lower_bb:,.2f})"
+                    
+                    # D. Stagnation Timeout
+                    if not should_close:
+                        max_hold = getattr(config, "smart_exit_max_hold_sec", 1200)
+                        if held_sec >= max_hold and len(df_ind) >= 3:
+                            if p_type == "BUY" and (df_ind['high'].iloc[-1] <= df_ind['high'].iloc[-2]):
+                                should_close = True
+                                exit_reason = f"Stagnation Timeout ({int(held_sec/60)}m in profit, momentum stalled)"
+                            elif p_type == "SELL" and (df_ind['low'].iloc[-1] >= df_ind['low'].iloc[-2]):
+                                should_close = True
+                                exit_reason = f"Stagnation Timeout ({int(held_sec/60)}m in profit, momentum stalled)"
+                                
+                    if should_close:
+                        logger.info(
+                            f"[🎯 SMART-PROFIT-EXIT] {self.symbol} Ticket #{ticket} ({p_type} {lots} lots) "
+                            f"-> ปิดทำกำไรก่อนชนเส้น TP ทันที! เหตุผล: {exit_reason} | กำไร: +${profit:,.2f}"
+                        )
+                        self.broker.close_order(ticket)
+                        # Only attribute the exit once the close actually went through:
+                        # a rejected close leaves the position open on its hard SL.
+                        self.exit_reasons[ticket] = f"SMART_EXIT:{exit_reason}"
+                        self.position_open_times.pop(ticket, None)
+                        self._reconcile_closed_trades()
+                        return True
+                except Exception as e:
+                    logger.warning(f"{self.symbol} Error evaluating smart profit exit for #{ticket}: {e}")
+
+        return False
 
     def _check_entry_cooldown(self) -> Tuple[bool, str]:
         """Ensures at least min_entry_interval_sec (e.g. 10 minutes) between new entries."""
@@ -289,12 +434,23 @@ class BaseSpecialistAgent(ABC):
         self.session_tracker.check_new_session(current_balance)
         summary = self.session_tracker.get_summary()
 
-        # 3. Check Open Positions for this Symbol & Manage them (Dynamic BE, Trailing)
+        # 3. Check Open Positions for this Symbol & Manage them (Dynamic BE, Trailing, Smart Exit)
         all_open = self.broker.get_open_positions()
         symbol_positions = [p for p in all_open if p.get("symbol") == self.symbol]
         
+        df_bars = None
+        if symbol_positions:
+            try:
+                df_bars = self.broker.get_market_data(symbol=self.symbol, timeframe=self.timeframe, bars=30)
+            except Exception as e:
+                logger.debug(f"{prefix} Could not fetch market data for position management: {e}")
+
+        active_positions = []
         for pos in symbol_positions:
-            self._manage_active_position(pos)
+            closed = self._manage_active_position(pos, df_main=df_bars)
+            if not closed:
+                active_positions.append(pos)
+        symbol_positions = active_positions
 
         # 4. Check Risk Gates & Allowance for opening NEW positions
         if not allow_new_entry:
@@ -363,7 +519,18 @@ class BaseSpecialistAgent(ABC):
                 }
 
         # 5. Fetch Market Data (Main Execution Timeframe e.g. M5)
-        df_main = self.broker.get_market_data(symbol=self.symbol, timeframe=self.timeframe, bars=60)
+        try:
+            df_main = self.broker.get_market_data(symbol=self.symbol, timeframe=self.timeframe, bars=60)
+        except MarketDataStale as exc:
+            logger.info(f"{prefix} Market closed / feed frozen, no entry: {exc}")
+            return {
+                "symbol": self.symbol,
+                "asset": self.asset_name,
+                "iteration": self.iteration_count,
+                "status": "MARKET_CLOSED",
+                "reason": str(exc),
+                "session_summary": summary
+            }
         if len(df_main) < 30:
             logger.warning(f"{prefix} Insufficient bars ({len(df_main)}) for {self.symbol}.")
             return {

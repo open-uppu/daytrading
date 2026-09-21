@@ -29,7 +29,9 @@ services:
     # Live order generation is opt-in and one-shot by default. Never restart a
     # failed strategy loop and accidentally turn a check into unattended trade.
     profiles: ["live"]
-    restart: unless-stopped
+    # "no": the loop exits 0 on daily target / max-loss lock; auto-restart would
+    # reset the daily baseline and resume trading, defeating both limits.
+    restart: "no"
     depends_on:
       - bridge
     env_file:

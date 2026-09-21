@@ -21,11 +21,17 @@ class TradingConfig(BaseSettings):
     min_rr_ratio: float = 1.3        # Minimum 1:1.3 Risk-to-Reward ratio
     target_rr_ratio: float = 2.0     # Default 1:2.0 RR (M5 scalper overrides to 1:1.5)
     trailing_be_enabled: bool = True # Enable Dynamic Breakeven Trailing
-    trailing_be_trigger_r: float = 0.50 # Move SL to Breakeven faster when trade reaches +0.50R
+    trailing_be_trigger_r: float = 1.0 # A/B experiment: breakeven at +1.0R, +0.50R was capping winners at ~0.55R
     ml_filter_enabled: bool = True   # Enable ML Meta-Labeling confidence filter
     ml_confidence_threshold: float = 0.70 # Confidence threshold (0.70 - 0.85)
     cadence_pacer_enabled: bool = True # Ensures orders every 5-10 minutes per active asset
     min_entry_interval_sec: int = 300  # 5-minute cadence interval (300 seconds = 1 M5 bar)
+    
+    # Smart Profit Exit Parameters (Active closing when in profit)
+    smart_exit_enabled: bool = False      # A/B experiment: OFF, firing at $0.20 (~0.08R) wrecked the payoff ratio (0.57-0.69)
+    smart_exit_min_profit_usd: float = 0.20 # Minimum profit in USD before considering early exit
+    smart_exit_wick_threshold: float = 0.35 # Wick rejection ratio (35%) indicating momentum stall
+    smart_exit_max_hold_sec: int = 1200     # 20 minutes max hold if in profit and stagnant
     
     # Gold specific contract details
     contract_size: float = 100.0     # 1 standard lot = 100 oz

@@ -75,6 +75,10 @@ MARKET_DATA_MAX_AGE_SEC = 90.0
 MAX_EXECUTION_RESULTS = 1_000
 
 
+class MarketDataStale(RuntimeError):
+    """Bars stopped changing: market closed or feed frozen."""
+
+
 class TelemetryPayload(BaseModel):
     account_number: int
     server: Optional[str] = "Exness-MT5Trial14"
@@ -236,9 +240,17 @@ async def receive_bars(payload: BarsPayload):
     """Called by MT5 to upload latest bars."""
     global _cached_bars
     key = f"{payload.symbol.upper()}:{payload.timeframe.upper()}"
+    now = monotonic_wall_time()
+    # A closed market keeps re-uploading the same frozen bars, so upload time
+    # says nothing about freshness; only a changed forming bar does.
+    last = payload.bars[-1] if payload.bars else None
+    prev = _cached_bars.get(key)
+    moved = prev is None or not prev["bars"] or last is None or any(
+        prev["bars"][-1].get(k) != last.get(k) for k in ("timestamp", "close", "volume"))
     _cached_bars[key] = {
         "bars": payload.bars,
-        "received_at": monotonic_wall_time(),
+        "received_at": now,
+        "changed_at": now if moved else prev["changed_at"],
     }
     return {"status": "BARS_STORED", "count": len(payload.bars), "key": key}
 
@@ -255,6 +267,7 @@ async def get_bars(symbol: str, timeframe: str = "M15"):
         "timeframe": timeframe.upper(),
         "bars": cached["bars"],
         "received_at": cached["received_at"],
+        "changed_at": cached.get("changed_at", cached["received_at"]),
     }
 
 
@@ -277,11 +290,20 @@ async def get_account_state():
 
 
 @app.get("/api/mt5/recently_closed")
-async def get_recently_closed():
-    """Returns and clears recently closed orders."""
-    recent = list(_mt5_state["recently_closed"])
-    _mt5_state["recently_closed"].clear()
-    return {"recently_closed": recent}
+async def get_recently_closed(symbol: Optional[str] = None):
+    """Returns and clears recently closed orders (only `symbol`'s when given)."""
+    return {"recently_closed": _pop_recently_closed(symbol)}
+
+
+def _pop_recently_closed(symbol: Optional[str]) -> List[Dict[str, Any]]:
+    queue = _mt5_state["recently_closed"]
+    if not symbol:
+        taken, kept = list(queue), []
+    else:
+        taken = [o for o in queue if str(o.get("symbol", "")).upper() == symbol.upper()]
+        kept = [o for o in queue if o not in taken]
+    queue[:] = kept
+    return taken
 
 
 @app.post("/api/mt5/queue_command")
@@ -443,6 +465,7 @@ class MT5BridgeBroker(BaseBroker):
                 cached = {
                     "bars": payload.get("bars", []),
                     "received_at": payload.get("received_at"),
+                    "changed_at": payload.get("changed_at"),
                 }
             except Exception as exc:
                 raise RuntimeError(f"Live market data endpoint unavailable for {key}: {exc}") from exc
@@ -456,10 +479,10 @@ class MT5BridgeBroker(BaseBroker):
                 f"Live market data unavailable for {key}; refusing to use historical fallback. "
                 "Check EA bar telemetry and WebRequest permissions."
             )
-        age = monotonic_wall_time() - float(cached["received_at"])
+        age = monotonic_wall_time() - float(cached.get("changed_at") or cached["received_at"])
         if age > MARKET_DATA_MAX_AGE_SEC:
-            raise RuntimeError(
-                f"Live market data stale for {key} ({age:.1f}s old, limit {MARKET_DATA_MAX_AGE_SEC:.0f}s)."
+            raise MarketDataStale(
+                f"Live market data stale for {key} (no new tick for {age:.1f}s, limit {MARKET_DATA_MAX_AGE_SEC:.0f}s)."
             )
         df = pd.DataFrame(cached["bars"])
         required = {"open", "high", "low", "close"}
@@ -618,14 +641,17 @@ class MT5BridgeBroker(BaseBroker):
             logger.warning(f"[MT5-HISTORY] Bridge unreachable ({type(e).__name__}: {e}); using in-process state.")
         return _mt5_state["closed_orders"]
 
-    def consume_recently_closed(self) -> List[Dict[str, Any]]:
-        try:
-            resp = httpx.get(f"{self.base_url}/api/mt5/recently_closed", timeout=3.0)
-            if resp.status_code == 200:
-                return resp.json().get("recently_closed", [])
-        except Exception as e:
-            logger.warning(f"[MT5-RECENT] Bridge unreachable ({type(e).__name__}: {e}); using in-process state.")
+    def consume_recently_closed(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not self.in_process:
+            try:
+                resp = httpx.get(
+                    f"{self.base_url}/api/mt5/recently_closed",
+                    params={"symbol": symbol} if symbol else None,
+                    timeout=3.0,
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("recently_closed", [])
+            except Exception as e:
+                logger.warning(f"[MT5-RECENT] Bridge unreachable ({type(e).__name__}: {e}); using in-process state.")
 
-        recent = list(_mt5_state["recently_closed"])
-        _mt5_state["recently_closed"].clear()
-        return recent
+        return _pop_recently_closed(symbol)
