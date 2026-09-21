@@ -5,10 +5,25 @@ Guarantees strict compliance with the 3% daily profit goal and capital preservat
 
 from typing import Dict, Any, Tuple, Optional
 from datetime import datetime, date, timezone
+from pathlib import Path
+import json
 import logging
 from config import config
 
 logger = logging.getLogger("risk_manager")
+
+
+def day_baseline(path: Path, balance: float, today: Optional[str] = None) -> float:
+    """First balance seen this UTC day, kept on disk so restarting the process cannot reset the daily loss cutoff."""
+    today = today or datetime.now(timezone.utc).date().isoformat()
+    try:
+        saved = json.loads(path.read_text())
+        if saved.get("date") == today and float(saved["balance"]) > 0:
+            return float(saved["balance"])
+    except (OSError, ValueError, KeyError, TypeError):
+        pass  # missing/corrupt/yesterday's file: start a fresh baseline
+    path.write_text(json.dumps({"date": today, "balance": balance}))
+    return balance
 
 
 class DailySessionTracker:
@@ -115,6 +130,8 @@ class DailySessionTracker:
 class RiskManager:
     """Manages position sizing, Stop-Loss, Take-Profit, and trade validation."""
 
+    MAX_RISK_OVERSHOOT = 2.0  # reject a trade whose actual risk exceeds this multiple of the per-trade budget
+
     def __init__(
         self,
         session_tracker: DailySessionTracker = None,
@@ -220,8 +237,17 @@ class RiskManager:
         # 3. Calculate Lot Size
         lot_size = self.calculate_lot_size(equity, entry_price, sl_price)
         
-        # Verify potential loss does not breach daily loss cutoff
         potential_loss = lot_size * sl_dist * self.contract_size
+
+        # The broker's min lot can force a risk far above budget on a small account (e.g. 0.01 XAU vs a $2 budget)
+        risk_budget = equity * self.risk_pct
+        if risk_budget > 0 and potential_loss > self.MAX_RISK_OVERSHOOT * risk_budget:
+            return False, (
+                f"Min-lot risk ${potential_loss:.2f} is {potential_loss / risk_budget:.1f}x the "
+                f"${risk_budget:.2f} per-trade budget (account too small for this stop distance)"
+            ), 0.0
+
+        # Verify potential loss does not breach daily loss cutoff
         remaining_loss_allowance = (
             (self.session_tracker.starting_balance * self.session_tracker.max_loss_pct) +
             self.session_tracker.closed_pnl_today

@@ -6,3 +6,6 @@ artifacts/charts/*.png
 artifacts/*_m15.png
 artifacts/*_m5.png
 scratch/
+
+# runtime: per-day loss-cutoff baseline written by the live squad
+journal/daily_baseline.json

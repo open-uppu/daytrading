@@ -17,6 +17,7 @@ from mt4.broker_interface import BaseBroker
 from mt4.paper_broker import PaperTradingBroker
 from mt5.bridge_server import MT5BridgeBroker
 from mt4.bridge_server import MT4BridgeBroker
+from risk.manager import day_baseline
 from agents.gold_agent import GoldSpecialistAgent
 from agents.btc_agent import BtcSpecialistAgent
 from agents.eth_agent import EthSpecialistAgent
@@ -83,7 +84,7 @@ class SquadManager:
 
         # 2. Portfolio-Level Session & 3% Profit Target Tracker
         self.session_date: date = datetime.now(timezone.utc).date()
-        self.starting_portfolio_balance: float = self.initial_balance
+        self.starting_portfolio_balance: float = self._day_baseline(self.initial_balance)
         self.target_pct: float = config.daily_target_pct  # 3.0%
         self.max_loss_pct: float = config.daily_max_loss_pct  # -2.0%
         self.target_profit_usd: float = self.starting_portfolio_balance * self.target_pct
@@ -137,6 +138,12 @@ class SquadManager:
         self.iteration_count: int = 0
         self.is_running: bool = False
 
+    def _day_baseline(self, balance: float) -> float:
+        """Live bridge only: persist the day's first balance so restarting the squad can't reset the loss cutoff."""
+        if isinstance(self.broker, MT5BridgeBroker) and not self.broker.in_process:
+            return day_baseline(config.journal_dir / "daily_baseline.json", balance)
+        return balance
+
     def check_new_session(self) -> None:
         """Resets daily portfolio tracker on new UTC date."""
         today = datetime.now(timezone.utc).date()
@@ -144,7 +151,7 @@ class SquadManager:
             logger.info(f"[Squad Manager] New trading session: {today}. Resetting portfolio tracker.")
             self.session_date = today
             acc = self.broker.get_account_info()
-            self.starting_portfolio_balance = acc["balance"]
+            self.starting_portfolio_balance = self._day_baseline(acc["balance"])
             self.target_profit_usd = self.starting_portfolio_balance * self.target_pct
             self.max_loss_usd = self.starting_portfolio_balance * self.max_loss_pct
 
@@ -237,7 +244,7 @@ class SquadManager:
 
         if portfolio_status["max_loss_reached"]:
             close_results = self._close_all_positions()
-            logger.warning(f"[Squad Manager] PORTFOLIO MAX DAILY LOSS CUTOFF HIT ({portfolio_status['daily_return_pct']:.2f}%). Halting squad.")
+            logger.warning(f"[Squad Manager] PORTFOLIO MAX DAILY LOSS CUTOFF HIT (equity {portfolio_status['equity_return_pct']:.2f}%, realized {portfolio_status['daily_return_pct']:.2f}%). Halting squad.")
             return {
                 "iteration": self.iteration_count,
                 "status": "PORTFOLIO_MAX_LOSS_CUTOFF",

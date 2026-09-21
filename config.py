@@ -21,7 +21,7 @@ class TradingConfig(BaseSettings):
     min_rr_ratio: float = 1.3        # Minimum 1:1.3 Risk-to-Reward ratio
     target_rr_ratio: float = 2.0     # Default 1:2.0 RR (M5 scalper overrides to 1:1.5)
     trailing_be_enabled: bool = True # Enable Dynamic Breakeven Trailing
-    trailing_be_trigger_r: float = 1.0 # A/B experiment: breakeven at +1.0R, +0.50R was capping winners at ~0.55R
+    trailing_be_trigger_r: float = 0.6 # Lock breakeven at +0.6R: at 1.0R winners that reached ~0.7-0.8R gave it all back to a full SL (16-trade live sample, 2026-09-21)
     ml_filter_enabled: bool = True   # Enable ML Meta-Labeling confidence filter
     ml_confidence_threshold: float = 0.70 # Confidence threshold (0.70 - 0.85)
     cadence_pacer_enabled: bool = True # Ensures orders every 5-10 minutes per active asset
