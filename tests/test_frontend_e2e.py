@@ -131,6 +131,9 @@ def test_telemetry_broadcast_to_websocket():
         # WebSocket client should receive live telemetry message
         ws_msg = ws.receive_json()
         assert ws_msg["type"] == "telemetry"
+        assert ws_msg["account"]["account_number"] == 99887766
+        assert ws_msg["account"]["server"] == "Exness-MT5Real"
+        assert ws_msg["account"]["mode"] == "MT5 LIVE"
         assert ws_msg["account"]["balance"] == 12500.50
         assert ws_msg["account"]["equity"] == 12850.75
         assert ws_msg["account"]["bid"] == 2685.20
@@ -177,25 +180,16 @@ def test_bars_broadcast_to_websocket():
 
 def test_cli_web_argument_and_banner():
     """Verifies main.py CLI arguments include --web flag for run and loop."""
-    import main
+    from main import build_parser
 
-    # 1. Test argument parser for 'run' and 'loop'
-    test_parser = argparse.ArgumentParser()
-    subparsers = test_parser.add_subparsers(dest="command")
-    
-    # Simulate parser logic as defined in main.py
-    for cmd_alias in ["loop", "run"]:
-        loop_parser = subparsers.add_parser(cmd_alias)
-        loop_parser.add_argument("--web", action="store_true", default=False)
-
-    args_default = test_parser.parse_args(["run"])
+    args_default = build_parser().parse_args(["run"])
     assert args_default.web is False
 
-    args_web = test_parser.parse_args(["run", "--web"])
-    assert args_web.web is True
+    args_run = build_parser().parse_args(["run", "--web"])
+    assert args_run.web is True
 
-    args_loop_web = test_parser.parse_args(["loop", "--web"])
-    assert args_loop_web.web is True
+    args_loop = build_parser().parse_args(["loop", "--web"])
+    assert args_loop.web is True
 
 
 def test_dashboard_js_fixes():

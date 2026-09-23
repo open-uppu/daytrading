@@ -98,9 +98,10 @@ def _launch_background_web(host: str, port: int):
 
     is_running = False
     try:
+        connect_host = host if host not in ("0.0.0.0", "") else "127.0.0.1"
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.5)
-            if s.connect_ex(("127.0.0.1", port)) == 0:
+            if s.connect_ex((connect_host, port)) == 0:
                 is_running = True
     except Exception:
         pass
@@ -323,7 +324,8 @@ def cmd_test_order(args):
         test_order.run_paper_test()
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Builds and returns the command-line argument parser for Pilotfish."""
     parser = argparse.ArgumentParser(description="Agentic Multi-Asset (Gold, BTC, ETH) Day Trading System")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
@@ -381,6 +383,11 @@ def main():
     to_parser = subparsers.add_parser("test-order", help="Test BUY, SELL and CLOSE order lifecycle")
     to_parser.add_argument("--mode", default="paper", choices=["paper", "mt5"], help="Execution mode (paper or mt5)")
     
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
     
     if args.command in ["loop", "run"]:

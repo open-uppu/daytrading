@@ -214,6 +214,9 @@ async def receive_telemetry(payload: TelemetryPayload):
         asyncio.create_task(ws_hub.broadcast({
             "type": "telemetry",
             "account": {
+                "account_number": _mt5_state["account_number"],
+                "server": _mt5_state["server"],
+                "mode": "MT5 LIVE",
                 "balance": _mt5_state["balance"],
                 "equity": _mt5_state["equity"],
                 "bid": _mt5_state["bid"],
