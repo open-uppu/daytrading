@@ -305,3 +305,26 @@ def test_run_loop_pauses_on_max_loss_cutoff_instead_of_exiting():
     # Cutoff stayed hit every iteration (realized loss persists); the loop
     # must still have run all 3 iterations instead of breaking after the 1st.
     assert squad.iteration_count == 3
+
+
+def test_symbol_positions_filtered_by_own_magic(tmp_path):
+    """Two timeframe-instances of the same symbol share one broker/account in
+    live MT5 mode. An instance must only see and manage its own positions --
+    not another instance's, even though both trade the same symbol."""
+    broker = PaperTradingBroker(initial_balance=10000.0)
+    agent_m5 = GoldSpecialistAgent(broker=broker, timeframe="M5",
+                                    journal_dir=tmp_path / "m5", magic=888999)
+    agent_m15 = GoldSpecialistAgent(broker=broker, timeframe="M15",
+                                     journal_dir=tmp_path / "m15", magic=888915)
+
+    entry = broker.current_price
+    res_m5 = broker.open_order(symbol="XAUUSD", order_type="BUY", lots=0.1,
+                                sl=entry - 5.0, tp=entry + 50.0, magic=888999)
+    res_m15 = broker.open_order(symbol="XAUUSD", order_type="BUY", lots=0.1,
+                                 sl=entry - 5.0, tp=entry + 50.0, magic=888915)
+
+    result_m5 = agent_m5.step(allow_new_entry=False)
+    result_m15 = agent_m15.step(allow_new_entry=False)
+
+    assert result_m5["position"]["ticket"] == res_m5["ticket"]
+    assert result_m15["position"]["ticket"] == res_m15["ticket"]

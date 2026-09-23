@@ -49,7 +49,8 @@ class BaseSpecialistAgent(ABC):
         journal_dir: Optional[Path] = None,
         strategy_type: str = "trend",
         max_open_positions: Optional[int] = None,
-        min_entry_interval_sec: Optional[int] = None
+        min_entry_interval_sec: Optional[int] = None,
+        magic: Optional[int] = None
     ):
         self.symbol = symbol
         self.asset_name = asset_name
@@ -62,7 +63,14 @@ class BaseSpecialistAgent(ABC):
         self.max_open_positions = max_open_positions or config.max_open_positions
         self.min_entry_interval_sec = min_entry_interval_sec if min_entry_interval_sec is not None else getattr(config, "min_entry_interval_sec", 300)
         self.last_entry_time: Optional[datetime] = None
-        
+        # Identifies which MT5 positions belong to this specific
+        # symbol+timeframe instance (see agents/squad_manager.py's
+        # TIMEFRAME_MAGIC table). Defaults to the historical single global
+        # magic (888999) so any direct/manual construction -- including
+        # every existing test -- keeps today's single-instance behavior
+        # unless it explicitly opts into a different one.
+        self.magic = magic if magic is not None else 888999
+
         self.broker_mode = broker_mode or config.broker_mode
         self.initial_balance = initial_balance or config.initial_balance
         
@@ -158,7 +166,7 @@ class BaseSpecialistAgent(ABC):
     def _reconcile_closed_trades(self) -> None:
         """Checks for newly closed trades, logs autopsies, and updates learned rules."""
         if hasattr(self.broker, "consume_recently_closed"):
-            closed_trades = self.broker.consume_recently_closed(symbol=self.symbol)
+            closed_trades = self.broker.consume_recently_closed(symbol=self.symbol, magic=self.magic)
         elif hasattr(self.broker, "get_closed_orders"):
             closed_trades = self.broker.get_closed_orders()
         elif hasattr(self.broker, "get_trade_history"):
@@ -307,7 +315,7 @@ class BaseSpecialistAgent(ABC):
                 if profit_dist >= trigger_dist and (sl < open_price or sl == 0.0):
                     new_sl = round(open_price + spread + (0.05 * self.min_sl_dist), 2)
                     try:
-                        self.broker.modify_order(ticket=ticket, sl=new_sl, tp=tp)
+                        self.broker.modify_order(ticket=ticket, sl=new_sl, tp=tp, magic=self.magic)
                         self.trailed_tickets.add(ticket)
                         self.be_sl_levels[ticket] = new_sl
                         logger.info(
@@ -322,7 +330,7 @@ class BaseSpecialistAgent(ABC):
                 if profit_dist >= trigger_dist and (sl > open_price or sl == 0.0):
                     new_sl = round(open_price - spread - (0.05 * self.min_sl_dist), 2)
                     try:
-                        self.broker.modify_order(ticket=ticket, sl=new_sl, tp=tp)
+                        self.broker.modify_order(ticket=ticket, sl=new_sl, tp=tp, magic=self.magic)
                         self.trailed_tickets.add(ticket)
                         self.be_sl_levels[ticket] = new_sl
                         logger.info(
@@ -419,7 +427,7 @@ class BaseSpecialistAgent(ABC):
                             f"[🎯 SMART-PROFIT-EXIT] {self.symbol} Ticket #{ticket} ({p_type} {lots} lots) "
                             f"-> ปิดทำกำไรก่อนชนเส้น TP ทันที! เหตุผล: {exit_reason} | กำไร: +${profit:,.2f}"
                         )
-                        self.broker.close_order(ticket)
+                        self.broker.close_order(ticket, magic=self.magic)
                         # Only attribute the exit once the close actually went through:
                         # a rejected close leaves the position open on its hard SL.
                         self.exit_reasons[ticket] = f"SMART_EXIT:{exit_reason}"
@@ -460,7 +468,10 @@ class BaseSpecialistAgent(ABC):
 
         # 3. Check Open Positions for this Symbol & Manage them (Dynamic BE, Trailing, Smart Exit)
         all_open = self.broker.get_open_positions()
-        symbol_positions = [p for p in all_open if p.get("symbol") == self.symbol]
+        symbol_positions = [
+            p for p in all_open
+            if p.get("symbol") == self.symbol and p.get("magic") == self.magic
+        ]
         
         df_bars = None
         if symbol_positions:
@@ -804,7 +815,8 @@ class BaseSpecialistAgent(ABC):
                 lots=lot_size,
                 sl=sl_candidate,
                 tp=tp_candidate,
-                comment=f"{self.symbol}_{self.strategy_name[:8]}"
+                comment=f"{self.symbol}_{self.strategy_name[:8]}",
+                magic=self.magic
             )
         except Exception as e:
             self.last_entry_time = datetime.now()
