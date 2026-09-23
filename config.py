@@ -15,8 +15,10 @@ class TradingConfig(BaseSettings):
     
     # Financial & Risk Parameters
     initial_balance: float = 10000.0
-    daily_target_pct: float = 0.03   # 3% target per day ($300 on $10,000)
-    daily_max_loss_pct: float = 0.02 # 2% max daily loss cutoff ($200 on $10,000)
+    daily_target_pct: float = 0.03   # 3% soft target/day: risk per trade is halved past this
+    daily_target_hard_pct: float = 0.20  # 20% hard target/day: trading locks entirely past this
+    daily_target_derisk_factor: float = 0.5  # risk-per-trade multiplier between soft and hard target
+    daily_max_loss_pct: float = 0.03 # 3% max daily loss cutoff ($300 on $10,000)
     risk_per_trade_pct: float = 0.005  # 0.5% per trade for high-frequency scalping
     min_rr_ratio: float = 1.3        # Minimum 1:1.3 Risk-to-Reward ratio
     target_rr_ratio: float = 2.0     # Default 1:2.0 RR (M5 scalper overrides to 1:1.5)
@@ -48,7 +50,15 @@ class TradingConfig(BaseSettings):
     atr_period: int = 14
     rsi_period: int = 14
     confluence_threshold: float = 75.0  # Confluence score >= 75 required for entry
-    
+
+    # Sentiment Confirmation (free, keyless external data)
+    sentiment_cache_ttl_sec: int = 900  # 15-min TTL for Fear & Greed / news sentiment cache files
+
+    # News Blackout Filter (free, keyless FF/FairEconomy economic calendar)
+    news_blackout_enabled: bool = True        # kill switch
+    news_blackout_window_min: int = 15        # minutes before/after a High-impact USD event
+    news_calendar_cache_ttl_sec: int = 3600   # feed refreshes weekly; hourly re-fetch is plenty
+
     # Loop & Observation settings
     loop_interval_sec: int = 10       # Poll every 10 seconds for high-frequency scalping
     max_open_positions: int = 3       # Allow up to 3 concurrent scalp positions per asset

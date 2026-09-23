@@ -26,6 +26,28 @@ def day_baseline(path: Path, balance: float, today: Optional[str] = None) -> flo
     return balance
 
 
+def load_daily_trade_state(path: Path, today: Optional[str] = None) -> Dict[str, Any]:
+    """Restores today's realized PnL/trade counts/seen-ticket set so a specialist
+    restart cannot re-count an already-realized closed ticket. Same per-day
+    file pattern as day_baseline()."""
+    today = today or datetime.now(timezone.utc).date().isoformat()
+    default: Dict[str, Any] = {
+        "date": today, "closed_pnl_today": 0.0, "trades_count_today": 0,
+        "wins_count_today": 0, "losses_count_today": 0, "known_closed_tickets": [],
+    }
+    try:
+        saved = json.loads(path.read_text())
+        if saved.get("date") == today:
+            return {**default, **saved}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass  # missing/corrupt/yesterday's file: start fresh
+    return default
+
+
+def save_daily_trade_state(path: Path, state: Dict[str, Any]) -> None:
+    path.write_text(json.dumps(state))
+
+
 class DailySessionTracker:
     """Tracks daily session PnL, locks trading when 3% profit is reached or max loss is hit."""
 
@@ -33,16 +55,21 @@ class DailySessionTracker:
         self,
         starting_balance: float = 10000.0,
         target_pct: float = None,
-        max_loss_pct: float = None
+        hard_target_pct: float = None,
+        max_loss_pct: float = None,
+        derisk_factor: float = None
     ):
         self.session_date: date = datetime.now(timezone.utc).date()
         self.starting_balance: float = starting_balance
         self.target_pct: float = target_pct or config.daily_target_pct
+        self.hard_target_pct: float = hard_target_pct or config.daily_target_hard_pct
         self.max_loss_pct: float = max_loss_pct or config.daily_max_loss_pct
-        
+        self.derisk_factor: float = derisk_factor or config.daily_target_derisk_factor
+
         self.target_profit_usd: float = self.starting_balance * self.target_pct
+        self.hard_target_profit_usd: float = self.starting_balance * self.hard_target_pct
         self.max_loss_usd: float = self.starting_balance * self.max_loss_pct
-        
+
         self.closed_pnl_today: float = 0.0
         self.trades_count_today: int = 0
         self.wins_count_today: int = 0
@@ -56,6 +83,7 @@ class DailySessionTracker:
             self.session_date = today
             self.starting_balance = current_balance
             self.target_profit_usd = self.starting_balance * self.target_pct
+            self.hard_target_profit_usd = self.starting_balance * self.hard_target_pct
             self.max_loss_usd = self.starting_balance * self.max_loss_pct
             self.closed_pnl_today = 0.0
             self.trades_count_today = 0
@@ -80,8 +108,18 @@ class DailySessionTracker:
 
     @property
     def is_target_reached(self) -> bool:
-        """Checks if the >= 3% daily target has been reached."""
+        """Soft checkpoint (default 3%): risk per trade is halved past this, trading continues."""
         return self.closed_pnl_today >= self.target_profit_usd
+
+    @property
+    def is_hard_target_reached(self) -> bool:
+        """Hard ceiling (default 6%): trading locks entirely past this."""
+        return self.closed_pnl_today >= self.hard_target_profit_usd
+
+    @property
+    def risk_multiplier(self) -> float:
+        """1.0 normally; derisk_factor once the soft target is reached."""
+        return self.derisk_factor if self.is_target_reached else 1.0
 
     @property
     def is_max_loss_hit(self) -> bool:
@@ -92,14 +130,14 @@ class DailySessionTracker:
         """
         Determines if the agent is authorized to take new trades today.
         """
-        if self.is_target_reached:
+        if self.is_hard_target_reached:
             return False, (
-                f"DAILY_TARGET_REACHED: Daily profit +{self.closed_pnl_today:.2f} USD "
-                f"(+{self.daily_return_pct:.2f}%) met or exceeded target of "
-                f"+{self.target_profit_usd:.2f} USD (+{self.target_pct*100:.1f}%). "
+                f"DAILY_HARD_TARGET_REACHED: Daily profit +{self.closed_pnl_today:.2f} USD "
+                f"(+{self.daily_return_pct:.2f}%) met or exceeded the hard cap of "
+                f"+{self.hard_target_profit_usd:.2f} USD (+{self.hard_target_pct*100:.1f}%). "
                 f"Trading locked to protect capital!"
             )
-            
+
         if self.is_max_loss_hit:
             return False, (
                 f"DAILY_LOSS_LIMIT_HIT: Daily loss {self.closed_pnl_today:.2f} USD "
@@ -108,6 +146,15 @@ class DailySessionTracker:
                 f"Trading ceased for safety!"
             )
             
+        if self.is_target_reached:
+            return True, (
+                f"AUTHORIZED_DERISKED: Daily profit +{self.closed_pnl_today:.2f} USD "
+                f"(+{self.daily_return_pct:.2f}%) passed the soft target of "
+                f"+{self.target_profit_usd:.2f} USD (+{self.target_pct*100:.1f}%). "
+                f"Risk per trade cut to {self.derisk_factor*100:.0f}% until the hard cap of "
+                f"+{self.hard_target_profit_usd:.2f} USD (+{self.hard_target_pct*100:.1f}%)."
+            )
+
         return True, "AUTHORIZED: Within daily risk and profit bounds."
 
     def get_summary(self) -> Dict[str, Any]:
@@ -116,10 +163,13 @@ class DailySessionTracker:
             "session_date": str(self.session_date),
             "starting_balance": self.starting_balance,
             "target_profit_usd": round(self.target_profit_usd, 2),
+            "hard_target_profit_usd": round(self.hard_target_profit_usd, 2),
+            "risk_multiplier": self.risk_multiplier,
             "max_loss_usd": round(self.max_loss_usd, 2),
             "closed_pnl_today": round(self.closed_pnl_today, 2),
             "daily_return_pct": round(self.daily_return_pct, 2),
             "target_reached": self.is_target_reached,
+            "hard_target_reached": self.is_hard_target_reached,
             "max_loss_hit": self.is_max_loss_hit,
             "trades_count": self.trades_count_today,
             "wins": self.wins_count_today,
@@ -156,18 +206,21 @@ class RiskManager:
         self,
         equity: float,
         entry_price: float,
-        sl_price: float
+        sl_price: float,
+        extra_multiplier: float = 1.0
     ) -> float:
         """
         Calculates exact lot size based on risk percentage and stop-loss distance.
         Formula: Lot = (Equity * Risk%) / (SL_Distance * Contract_Size)
+        `extra_multiplier` composes with the daily-target derisk (e.g. a news
+        blackout window's own derisk factor).
         """
         sl_distance = abs(entry_price - sl_price)
         if sl_distance <= 0.001:
             raise ValueError(f"Stop loss distance too small: {sl_distance:.4f}")
 
-        # Maximum cash risk on this trade
-        risk_cash = equity * self.risk_pct
+        # Maximum cash risk on this trade (halved once the soft daily target derisks)
+        risk_cash = equity * self.risk_pct * self.session_tracker.risk_multiplier * extra_multiplier
         
         # Loss per 1.00 standard lot for this stop loss distance
         loss_per_lot = sl_distance * self.contract_size
@@ -213,10 +266,13 @@ class RiskManager:
         entry_price: float,
         sl_price: float,
         tp_price: float,
-        equity: float
+        equity: float,
+        extra_multiplier: float = 1.0
     ) -> Tuple[bool, str, float]:
         """
         Performs full risk verification before allowing order dispatch.
+        `extra_multiplier` composes with the daily-target derisk (e.g. a news
+        blackout window's own derisk factor).
         Returns: (is_valid, reason, lot_size)
         """
         # 1. Check Daily Session Limits
@@ -235,12 +291,12 @@ class RiskManager:
             return False, f"Risk-Reward {rr_ratio:.2f} is below minimum allowed ({self.min_rr})", 0.0
 
         # 3. Calculate Lot Size
-        lot_size = self.calculate_lot_size(equity, entry_price, sl_price)
-        
+        lot_size = self.calculate_lot_size(equity, entry_price, sl_price, extra_multiplier)
+
         potential_loss = lot_size * sl_dist * self.contract_size
 
         # The broker's min lot can force a risk far above budget on a small account (e.g. 0.01 XAU vs a $2 budget)
-        risk_budget = equity * self.risk_pct
+        risk_budget = equity * self.risk_pct * extra_multiplier
         if risk_budget > 0 and potential_loss > self.MAX_RISK_OVERSHOOT * risk_budget:
             return False, (
                 f"Min-lot risk ${potential_loss:.2f} is {potential_loss / risk_budget:.1f}x the "

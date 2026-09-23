@@ -6,7 +6,7 @@ Provides the abstract lifecycle and execution core for asset-specific specialist
 from typing import Dict, Any, Optional, Tuple
 from abc import ABC, abstractmethod
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import pandas as pd
 
@@ -15,7 +15,9 @@ from mt4.broker_interface import BaseBroker
 from mt4.paper_broker import PaperTradingBroker
 from mt5.bridge_server import MT5BridgeBroker, MarketDataStale
 from mt4.bridge_server import MT4BridgeBroker
-from risk.manager import DailySessionTracker, RiskManager
+from risk.manager import DailySessionTracker, RiskManager, load_daily_trade_state, save_daily_trade_state
+from core.news_calendar import fetch_ff_calendar, get_news_window_status
+from core.sentiment import get_cached_value
 from core.chart_generator import generate_candlestick_chart
 from core.indicators import compute_all_indicators, analyze_candlestick_patterns
 from core.vision_analyzer import VisionAnalyzer
@@ -99,6 +101,20 @@ class BaseSpecialistAgent(ABC):
             target_pct=config.daily_target_pct,
             max_loss_pct=config.daily_max_loss_pct
         )
+        # Restore today's already-realized PnL/ticket set so a restart cannot
+        # re-count a closed trade the EA's rolling-window telemetry re-reports.
+        self.daily_trade_state_file = self.journal_dir / "daily_trade_state.json"
+        # Per-agent cache file (like daily_trade_state_file above): a shared
+        # file across specialists would need locking since get_cached_value
+        # isn't safe for concurrent writers, and would break test isolation.
+        # All three symbols quote in USD, so a redundant fetch per agent per
+        # TTL window (a free, keyless endpoint) is a fine tradeoff.
+        self.news_calendar_cache_file = self.journal_dir / "ff_calendar_cache.json"
+        _dts = load_daily_trade_state(self.daily_trade_state_file)
+        self.session_tracker.closed_pnl_today = _dts["closed_pnl_today"]
+        self.session_tracker.trades_count_today = _dts["trades_count_today"]
+        self.session_tracker.wins_count_today = _dts["wins_count_today"]
+        self.session_tracker.losses_count_today = _dts["losses_count_today"]
         trade_risk = getattr(config, "risk_per_trade_pct", 0.005) if self.timeframe == "M5" else 0.015
         target_rr = getattr(config, "target_rr_ratio", 1.5) if self.timeframe == "M5" else 2.0
         self.risk_manager = RiskManager(
@@ -119,7 +135,7 @@ class BaseSpecialistAgent(ABC):
         self.last_chart_path: Optional[Path] = None
         self.last_signal: Dict[str, Any] = {"action": "HOLD"}
         self.iteration_count: int = 0
-        self.known_closed_tickets: set = set()
+        self.known_closed_tickets: set = set(_dts["known_closed_tickets"])
         self.trailed_tickets: set = set()
         self.position_open_times: Dict[int, datetime] = {}
         self.exit_reasons: Dict[int, str] = {}
@@ -163,6 +179,14 @@ class BaseSpecialistAgent(ABC):
                 be_level = self.be_sl_levels.pop(ticket, None)
                 pnl = t.get("profit", t.get("pnl_usd", 0.0))
                 self.session_tracker.record_closed_trade(pnl)
+                save_daily_trade_state(self.daily_trade_state_file, {
+                    "date": datetime.now(timezone.utc).date().isoformat(),
+                    "closed_pnl_today": self.session_tracker.closed_pnl_today,
+                    "trades_count_today": self.session_tracker.trades_count_today,
+                    "wins_count_today": self.session_tracker.wins_count_today,
+                    "losses_count_today": self.session_tracker.losses_count_today,
+                    "known_closed_tickets": list(self.known_closed_tickets),
+                })
                 current_bal = self.session_tracker.starting_balance + self.session_tracker.closed_pnl_today
                 logger.info(
                     f"[4. ปิดจริง / REAL-ORDER-CLOSED] {self.symbol} Ticket #{ticket} ออเดอร์ปิดแล้วในตลาด! "
@@ -488,6 +512,29 @@ class BaseSpecialistAgent(ABC):
                 "session_summary": summary
             }
 
+        news_status = {"blackout": False, "derisk": False, "reason": "disabled"}
+        if getattr(config, "news_blackout_enabled", True):
+            calendar = get_cached_value(
+                self.news_calendar_cache_file,
+                config.news_calendar_cache_ttl_sec,
+                fetch_ff_calendar,
+            )
+            news_status = get_news_window_status(
+                datetime.now(timezone.utc), calendar, config.news_blackout_window_min
+            )
+            if news_status["blackout"]:
+                logger.info(f"{prefix} [NEWS-BLACKOUT] {news_status['reason']}")
+                return {
+                    "symbol": self.symbol,
+                    "asset": self.asset_name,
+                    "iteration": self.iteration_count,
+                    "status": "NEWS_BLACKOUT_ACTIVE",
+                    "reason": news_status["reason"],
+                    "position": symbol_positions[0] if symbol_positions else None,
+                    "positions": symbol_positions,
+                    "session_summary": summary
+                }
+
         if len(symbol_positions) >= self.max_open_positions:
             logger.info(
                 f"{prefix} Max open positions reached ({len(symbol_positions)}/{self.max_open_positions}). Monitoring active scalp trades."
@@ -502,21 +549,22 @@ class BaseSpecialistAgent(ABC):
                 "session_summary": summary
             }
 
-        # If already holding 1 or more positions, enforce cadence spacing
-        if len(symbol_positions) > 0:
-            can_enter, cooldown_reason = self._check_entry_cooldown()
-            if not can_enter:
-                logger.info(f"{prefix} Monitoring {len(symbol_positions)} position(s). {cooldown_reason}")
-                return {
-                    "symbol": self.symbol,
-                    "asset": self.asset_name,
-                    "iteration": self.iteration_count,
-                    "status": "MONITORING_POSITION",
-                    "reason": cooldown_reason,
-                    "position": symbol_positions[0],
-                    "positions": symbol_positions,
-                    "session_summary": summary
-                }
+        # Enforce cadence spacing -- also throttles retries after a FAILED
+        # dispatch, which leaves no open position but must still cool down.
+        can_enter, cooldown_reason = self._check_entry_cooldown()
+        if not can_enter:
+            status_note = f"Monitoring {len(symbol_positions)} position(s). " if symbol_positions else ""
+            logger.info(f"{prefix} {status_note}{cooldown_reason}")
+            return {
+                "symbol": self.symbol,
+                "asset": self.asset_name,
+                "iteration": self.iteration_count,
+                "status": "MONITORING_POSITION" if symbol_positions else "COOLDOWN",
+                "reason": cooldown_reason,
+                "position": symbol_positions[0] if symbol_positions else None,
+                "positions": symbol_positions,
+                "session_summary": summary
+            }
 
         # 5. Fetch Market Data (Main Execution Timeframe e.g. M5)
         try:
@@ -667,7 +715,8 @@ class BaseSpecialistAgent(ABC):
             entry_price=current_price,
             sl_price=sl_candidate,
             ema_200=ema_200,
-            atr=atr
+            atr=atr,
+            signal_type=signal.get("signal_type")
         )
 
         logger.info(
@@ -690,7 +739,7 @@ class BaseSpecialistAgent(ABC):
         if getattr(config, "ml_filter_enabled", True):
             is_cadence = (signal.get("signal_type") == "CADENCE_PACER")
             default_thresh = getattr(config, "ml_confidence_threshold", 0.75)
-            ml_threshold = 0.65 if is_cadence else default_thresh
+            ml_threshold = 0.75 if is_cadence else default_thresh
             ml_passed, ml_conf, ml_details = self.ml_filter.evaluate_proposal(
                 signal=signal,
                 df_window=df_main,
@@ -712,12 +761,14 @@ class BaseSpecialistAgent(ABC):
                 }
 
         # 9. Risk Sizing & Order Validation
+        news_extra_multiplier = config.daily_target_derisk_factor if news_status["derisk"] else 1.0
         is_valid, risk_reason, lot_size = self.risk_manager.validate_trade_proposal(
             action=action,
             entry_price=current_price,
             sl_price=sl_candidate,
             tp_price=tp_candidate,
-            equity=current_equity
+            equity=current_equity,
+            extra_multiplier=news_extra_multiplier
         )
 
         sl_dist = abs(current_price - sl_candidate)
@@ -756,6 +807,7 @@ class BaseSpecialistAgent(ABC):
                 comment=f"{self.symbol}_{self.strategy_name[:8]}"
             )
         except Exception as e:
+            self.last_entry_time = datetime.now()
             logger.error(
                 f"[3. สั่งซื้อจริง / ORDER-FAILED] {self.symbol} ส่งคำสั่งล้มเหลว: {type(e).__name__}: {e}"
             )
