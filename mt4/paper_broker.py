@@ -190,7 +190,7 @@ class PaperTradingBroker(BaseBroker):
         recent = [
             o for o in self.recently_closed_orders
             if (not symbol or o.get("symbol") == symbol)
-            and (magic is None or o.get("magic") == magic)
+            and (magic is None or o.get("magic", 888999) == magic)
         ]
         self.recently_closed_orders[:] = [o for o in self.recently_closed_orders if o not in recent]
         return recent

@@ -470,7 +470,7 @@ class BaseSpecialistAgent(ABC):
         all_open = self.broker.get_open_positions()
         symbol_positions = [
             p for p in all_open
-            if p.get("symbol") == self.symbol and p.get("magic") == self.magic
+            if p.get("symbol") == self.symbol and p.get("magic", 888999) == self.magic
         ]
         
         df_bars = None

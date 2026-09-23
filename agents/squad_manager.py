@@ -191,7 +191,7 @@ class SquadManager:
                 initial_balance=self.initial_balance,
                 timeframe=effective_timeframe,
                 journal_dir=(journal_dir / journal_subdir) if journal_dir else None,
-                magic=magic_for_timeframe(effective_timeframe)
+                magic=magic_for_timeframe(self.timeframe)
             )
 
         if self.broker_mode == "mt5" and isinstance(self.broker, MT5BridgeBroker):

@@ -176,17 +176,33 @@ def test_squad_manager_assigns_per_timeframe_magic_and_journal_dir(tmp_path):
     assert squad_m15.specialists["gold"].journal_dir == tmp_path / "m15" / "xauusd"
 
 
-def test_squad_manager_uses_forced_timeframes_own_magic_not_squads(tmp_path):
-    """xag/gbp/eur/xpt are forced to M15 regardless of the squad's own
-    timeframe (see SPECIALIST_REGISTRY) -- their magic must follow their
-    actual (forced) timeframe, not whatever the squad was started with."""
+def test_squad_manager_shares_one_magic_across_all_specialists(tmp_path):
+    """Every specialist in a SquadManager process shares ONE magic number,
+    keyed by the squad's OWN timeframe -- exactly like they already share
+    one journal_dir root. xag/gbp/eur/xpt are forced to trade M15 strategy
+    logic regardless of the squad's own timeframe (see SPECIALIST_REGISTRY),
+    but that only changes their `.timeframe` (which strategy logic runs),
+    never their `.magic` (which identifies positions for this process)."""
     from agents.squad_manager import TIMEFRAME_MAGIC
     broker = PaperTradingBroker(initial_balance=10000.0)
-    squad = SquadManager(broker=broker, initial_balance=10000.0,
-                          agents_to_enable=["all"], timeframe="M5",
-                          journal_dir=tmp_path)
-    assert squad.specialists["gold"].magic == 888999
-    assert squad.specialists["xag"].magic == TIMEFRAME_MAGIC["M15"]
+
+    # A squad started at the M5 default: xag is forced to M15 strategy logic
+    # internally, but must still share the squad's own M5 magic with gold.
+    squad_m5 = SquadManager(broker=broker, initial_balance=10000.0,
+                             agents_to_enable=["all"], timeframe="M5",
+                             journal_dir=tmp_path)
+    assert squad_m5.specialists["gold"].magic == 888999
+    assert squad_m5.specialists["xag"].magic == 888999
+    assert squad_m5.specialists["xag"].timeframe == "M15"  # strategy logic unaffected
+
+    # A dedicated M15 squad: ALL specialists (forced or not) share the M15
+    # magic uniformly.
+    broker2 = PaperTradingBroker(initial_balance=10000.0)
+    squad_m15 = SquadManager(broker=broker2, initial_balance=10000.0,
+                              agents_to_enable=["all"], timeframe="M15",
+                              journal_dir=tmp_path)
+    assert squad_m15.specialists["gold"].magic == TIMEFRAME_MAGIC["M15"]
+    assert squad_m15.specialists["xag"].magic == TIMEFRAME_MAGIC["M15"]
 
 
 def test_portfolio_open_risk_uses_real_contract_size_for_new_markets(monkeypatch):

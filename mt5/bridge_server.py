@@ -300,7 +300,7 @@ def _pop_recently_closed(symbol: Optional[str], magic: Optional[int] = None) -> 
     taken = [
         o for o in queue
         if (not symbol or str(o.get("symbol", "")).upper() == symbol.upper())
-        and (magic is None or o.get("magic") == magic)
+        and (magic is None or o.get("magic", 888999) == magic)
     ]
     kept = [o for o in queue if o not in taken]
     queue[:] = kept
