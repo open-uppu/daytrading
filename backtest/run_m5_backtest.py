@@ -245,11 +245,23 @@ class M5BacktestEngine:
 def run_single_asset_m5_backtest(
     symbol: str = "XAUUSD",
     initial_balance: float = 10000.0,
-    max_bars: Optional[int] = None
+    max_bars: Optional[int] = None,
+    use_candlestick_confirmation: bool = True,
+    use_vwap_confirmation: bool = False,
+    use_funding_confirmation: bool = False,
+    use_smc_confirmation: bool = False,
+    use_rsi_divergence_confirmation: bool = False,
+    use_order_block_confirmation: bool = False,
+    use_fear_greed_confirmation: bool = False,
+    use_news_sentiment_confirmation: bool = False,
+    news_sentiment_score: Optional[float] = None,
+    df_override: Optional[pd.DataFrame] = None
 ) -> Dict[str, Any]:
-    """Runs high-frequency M5 scalping backtest for a single asset."""
+    """Runs high-frequency M5 scalping backtest for a single asset.
+    `df_override` lets a caller pass pre-enriched OHLCV (e.g. with an extra
+    `funding_rate` column merged in) instead of the plain cached CSV."""
     sym = symbol.upper()
-    df = load_historical_data(symbol=sym, timeframe="M5")
+    df = df_override if df_override is not None else load_historical_data(symbol=sym, timeframe="M5")
     if max_bars and len(df) > max_bars:
         df = df.iloc[:max_bars].copy()
 
@@ -271,7 +283,18 @@ def run_single_asset_m5_backtest(
     )
 
     def signal_wrapper(window: pd.DataFrame, idx: int) -> Dict[str, Any]:
-        return strategy_m5_scalper(window, idx, asset_type=asset_type)
+        return strategy_m5_scalper(
+            window, idx, asset_type=asset_type,
+            use_candlestick_confirmation=use_candlestick_confirmation,
+            use_vwap_confirmation=use_vwap_confirmation,
+            use_funding_confirmation=use_funding_confirmation,
+            use_smc_confirmation=use_smc_confirmation,
+            use_rsi_divergence_confirmation=use_rsi_divergence_confirmation,
+            use_order_block_confirmation=use_order_block_confirmation,
+            use_fear_greed_confirmation=use_fear_greed_confirmation,
+            use_news_sentiment_confirmation=use_news_sentiment_confirmation,
+            news_sentiment_score=news_sentiment_score
+        )
 
     metrics = engine.run(
         df=df,

@@ -12,6 +12,82 @@ def compute_ema(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False).mean()
 
 
+def detect_liquidity_sweep(df: pd.DataFrame, lookback: int = 10) -> Dict[str, bool]:
+    """SMC-style liquidity sweep: the current bar breaks a recent swing extreme
+    (hunts resting stops) then closes back inside it -- a structural, multi-bar
+    signal, distinct from a single-candle wick/pin-bar read. Trailing-only
+    (no lookahead), safe to call on live/incomplete data."""
+    if len(df) < lookback + 1:
+        return {"bullish_sweep": False, "bearish_sweep": False}
+    prior = df.iloc[-(lookback + 1):-1]
+    current = df.iloc[-1]
+    prior_low = float(prior['low'].min())
+    prior_high = float(prior['high'].max())
+    return {
+        "bullish_sweep": bool(float(current['low']) < prior_low and float(current['close']) > prior_low),
+        "bearish_sweep": bool(float(current['high']) > prior_high and float(current['close']) < prior_high),
+    }
+
+
+def detect_rsi_divergence(df: pd.DataFrame, lookback: int = 10) -> Dict[str, bool]:
+    """Momentum divergence: price makes a new extreme but RSI does not confirm
+    it -- a classic real-trader reversal signal, distinct from pure price action."""
+    if len(df) < lookback + 1 or 'rsi_14' not in df.columns:
+        return {"bullish_divergence": False, "bearish_divergence": False}
+    prior = df.iloc[-(lookback + 1):-1]
+    current = df.iloc[-1]
+
+    prior_low_row = prior.loc[prior['low'].idxmin()]
+    prior_high_row = prior.loc[prior['high'].idxmax()]
+
+    bullish = bool(
+        float(current['low']) < float(prior_low_row['low']) and
+        float(current['rsi_14']) > float(prior_low_row['rsi_14'])
+    )
+    bearish = bool(
+        float(current['high']) > float(prior_high_row['high']) and
+        float(current['rsi_14']) < float(prior_high_row['rsi_14'])
+    )
+    return {"bullish_divergence": bullish, "bearish_divergence": bearish}
+
+
+def detect_order_block_retest(df: pd.DataFrame, lookback: int = 15, impulse_mult: float = 1.5) -> Dict[str, bool]:
+    """SMC order block: the nearest unmitigated opposite-colour candle right
+    before a strong impulsive move, currently being retested. Structural and
+    zone-based, distinct from the sweep-and-reclaim liquidity-sweep signal."""
+    if len(df) < lookback + 2 or 'atr_14' not in df.columns:
+        return {"bullish_ob_retest": False, "bearish_ob_retest": False}
+    atr = float(df['atr_14'].iloc[-1])
+    current_close = float(df['close'].iloc[-1])
+    window = df.iloc[-(lookback + 1):-1].reset_index(drop=True)
+
+    bullish_ob = None
+    bearish_ob = None
+    for i in range(len(window) - 1, 0, -1):
+        row = window.iloc[i - 1]
+        nxt = window.iloc[i]
+        if bullish_ob is None and row['close'] < row['open'] and (nxt['close'] - row['close']) > impulse_mult * atr:
+            bullish_ob = (float(row['low']), float(row['high']))
+        if bearish_ob is None and row['close'] > row['open'] and (row['close'] - nxt['close']) > impulse_mult * atr:
+            bearish_ob = (float(row['low']), float(row['high']))
+        if bullish_ob is not None and bearish_ob is not None:
+            break
+
+    return {
+        "bullish_ob_retest": bool(bullish_ob and bullish_ob[0] <= current_close <= bullish_ob[1]),
+        "bearish_ob_retest": bool(bearish_ob and bearish_ob[0] <= current_close <= bearish_ob[1]),
+    }
+
+
+def compute_vwap(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """Rolling Volume-Weighted Average Price over `period` bars.
+    NaN where the window's total volume is 0 (dead/illiquid bars), never divides by zero."""
+    typical_price = (df['high'] + df['low'] + df['close']) / 3.0
+    pv_sum = (typical_price * df['volume']).rolling(period).sum()
+    vol_sum = df['volume'].rolling(period).sum()
+    return pv_sum / vol_sum.replace(0, np.nan)
+
+
 def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """Calculates Average True Range."""
     high = df['high']
