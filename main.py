@@ -33,6 +33,16 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 console = Console()
 
 
+def _default_journal_dir(timeframe: str) -> Path:
+    """The M5 production squad's journal path must never move -- it's
+    journal/ today and stays journal/ regardless of this feature. Every
+    other timeframe gets its own journal_<tf>/ so concurrent same-symbol
+    instances never share daily_trade_state.json."""
+    if timeframe.upper() == "M5":
+        return config.project_root / "journal"
+    return config.project_root / f"journal_{timeframe.lower()}"
+
+
 def cmd_analyze(args):
     """Performs a single-pass multimodal market analysis for a given asset."""
     symbol = "XAUUSD" if args.symbol.upper() in ["GOLD", "XAUUSD"] else args.symbol.upper()
@@ -91,10 +101,13 @@ def cmd_loop(args):
         "ukoil": ["ukoil"], "xng": ["xng"],
     }
     selected_agents = agents_map.get(args.agent.lower(), ["all"])
-    
+    effective_timeframe = getattr(args, "timeframe", config.timeframe_main)
+    journal_dir = Path(args.journal_dir) if getattr(args, "journal_dir", None) else _default_journal_dir(effective_timeframe)
+
     console.print(Panel(
         f"[bold cyan]Agentic Multi-Asset Specialist Squad[/bold cyan]\n"
         f"Active Specialists: [bold yellow]{', '.join([a.upper() for a in selected_agents])}[/bold yellow]\n"
+        f"Timeframe: [bold]{effective_timeframe}[/bold] | Journal: [bold]{journal_dir}[/bold]\n"
         f"Daily Profit Target: [bold green]+3.0%[/bold green] (Lock on achievement) | Loss Cutoff: [bold red]-2.0%[/bold red]\n"
         f"Broker Mode: [bold]{args.mode}[/bold] | Interval: [bold]{args.interval}s[/bold]",
         expand=False
@@ -109,7 +122,8 @@ def cmd_loop(args):
                 broker_mode=args.mode,
                 initial_balance=args.balance,
                 agents_to_enable=selected_agents,
-                timeframe=getattr(args, "timeframe", config.timeframe_main)
+                timeframe=effective_timeframe,
+                journal_dir=journal_dir
             )
             break
         except RuntimeError as exc:
@@ -264,7 +278,11 @@ def main():
         loop_parser.add_argument("--mode", default="mt5", choices=["mt5", "paper", "mt4"], help="Broker execution mode")
         loop_parser.add_argument("--balance", type=float, default=10000.0, help="Initial account balance")
         loop_parser.add_argument("--interval", type=int, default=5, help="Loop interval in seconds")
-        loop_parser.add_argument("--timeframe", default=config.timeframe_main, choices=["M1", "M5", "M15", "H1"], help="Execution timeframe (e.g. M5 for high frequency)")
+        loop_parser.add_argument("--timeframe", default=config.timeframe_main,
+                                  choices=["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
+                                  help="Execution timeframe (e.g. M5 for high frequency)")
+        loop_parser.add_argument("--journal-dir", default=None,
+                                  help="Override the journal directory (default: journal/ for M5, journal_<tf>/ otherwise)")
         loop_parser.add_argument("--max-iter", type=int, default=None, help="Stop after N iterations (for testing)")
         loop_parser.add_argument(
             "--wait-for-live-data", action="store_true",
