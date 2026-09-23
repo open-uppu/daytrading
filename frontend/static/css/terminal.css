@@ -1,0 +1,296 @@
+/* ==========================================================================
+   PILOTFISH QUANT TERMINAL - Dark Terminal Theme (Bloomberg / TradingView)
+   ========================================================================== */
+
+:root {
+  --bg-app: #07090e;
+  --bg-card: #0d1322;
+  --bg-card-hover: #131c31;
+  --bg-panel: #0a0f1d;
+  --border-terminal: #1e293b;
+  --border-highlight: #334155;
+  --text-primary: #f1f5f9;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
+  --color-green: #10b981;
+  --color-green-glow: rgba(16, 185, 129, 0.4);
+  --color-red: #ef4444;
+  --color-red-glow: rgba(239, 68, 68, 0.4);
+  --color-yellow: #f59e0b;
+  --color-yellow-glow: rgba(245, 158, 11, 0.4);
+  --color-blue: #3b82f6;
+  --color-cyan: #06b6d4;
+  --color-purple: #8b5cf6;
+}
+
+/* Base Body & Fonts */
+body {
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-mono-term {
+  font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+/* Custom Sleek Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #080c16;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Terminal Cards & Containers */
+.terminal-card {
+  background: linear-gradient(180deg, rgba(13, 19, 34, 0.95) 0%, rgba(9, 13, 23, 0.98) 100%);
+  border: 1px solid var(--border-terminal);
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.6);
+  position: relative;
+  overflow: hidden;
+}
+
+.terminal-card-header {
+  border-bottom: 1px solid rgba(30, 41, 59, 0.8);
+  padding: 0.625rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(15, 23, 42, 0.4);
+}
+
+/* Status Badges & Glow Animations */
+.pulse-green {
+  animation: pulse-glow-green 2s infinite ease-in-out;
+}
+
+.pulse-yellow {
+  animation: pulse-glow-yellow 2s infinite ease-in-out;
+}
+
+.pulse-red {
+  animation: pulse-glow-red 2s infinite ease-in-out;
+}
+
+@keyframes pulse-glow-green {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+    transform: scale(1.08);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+    transform: scale(1);
+  }
+}
+
+@keyframes pulse-glow-yellow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(245, 158, 11, 0);
+    transform: scale(1.08);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+    transform: scale(1);
+  }
+}
+
+@keyframes pulse-glow-red {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
+    transform: scale(1.08);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+    transform: scale(1);
+  }
+}
+
+/* Tick & PnL Flash Animations */
+.flash-green {
+  animation: flash-green-anim 0.8s ease-out;
+}
+
+.flash-red {
+  animation: flash-red-anim 0.8s ease-out;
+}
+
+@keyframes flash-green-anim {
+  0% {
+    background-color: rgba(16, 185, 129, 0.35);
+    color: #34d399;
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes flash-red-anim {
+  0% {
+    background-color: rgba(239, 68, 68, 0.35);
+    color: #f87171;
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+/* Target Progress Bar & Multi-Marker Track */
+.target-track-container {
+  position: relative;
+  width: 100%;
+  height: 24px;
+  background: #090d18;
+  border-radius: 6px;
+  border: 1px solid var(--border-terminal);
+  overflow: visible;
+}
+
+.target-progress-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.3s ease;
+  position: relative;
+}
+
+.target-marker-line {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.target-marker-pin {
+  position: absolute;
+  top: -18px;
+  transform: translateX(-50%);
+  font-size: 10px;
+  font-weight: 600;
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  padding: 1px 4px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* Terminal Buttons */
+.term-btn {
+  background: #0d1527;
+  color: #94a3b8;
+  border: 1px solid var(--border-terminal);
+  padding: 0.3rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  border-radius: 0.375rem;
+  transition: all 0.15s ease-in-out;
+  cursor: pointer;
+}
+
+.term-btn:hover {
+  background: #162038;
+  color: #f1f5f9;
+  border-color: #3b82f6;
+}
+
+.term-btn-active {
+  background: #1e3a8a !important;
+  color: #60a5fa !important;
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
+}
+
+/* Tables & Badges */
+.term-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.term-table th {
+  background: #090e1c;
+  color: #64748b;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-terminal);
+}
+
+.term-table td {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  border-bottom: 1px solid rgba(30, 41, 59, 0.4);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.term-table tbody tr:hover {
+  background: rgba(30, 41, 59, 0.3);
+}
+
+.badge-buy {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.25rem;
+}
+
+.badge-sell {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.25rem;
+}
+
+/* Specialist Cards */
+.specialist-card {
+  background: rgba(11, 17, 32, 0.85);
+  border: 1px solid var(--border-terminal);
+  border-radius: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  transition: all 0.2s ease;
+}
+
+.specialist-card:hover {
+  border-color: var(--border-highlight);
+  background: rgba(15, 23, 42, 0.95);
+}
+
+/* Chart Canvas Overrides */
+#tv-chart {
+  min-height: 450px;
+}
