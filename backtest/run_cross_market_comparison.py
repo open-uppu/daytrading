@@ -32,13 +32,14 @@ logger = logging.getLogger("cross_market")
 
 def evaluate_market_strategies(
     symbol: str,
-    initial_balance: float = 10000.0
+    initial_balance: float = 10000.0,
+    timeframe: str = "M15"
 ) -> Dict[str, Any]:
     """
     Evaluates all strategies on a specific market and returns ranked results and winner.
     """
     spec = ASSET_SPECS.get(symbol, ASSET_SPECS["XAUUSD"])
-    df = load_historical_data(symbol=symbol, timeframe="M15")
+    df = load_historical_data(symbol=symbol, timeframe=timeframe)
     
     engine = BacktestEngine(
         initial_balance=initial_balance,
@@ -61,7 +62,7 @@ def evaluate_market_strategies(
     ]
     
     market_results = []
-    console.print(f"\n[bold gold1]=== Testing Market: {symbol} ({spec['name']}) | {len(df)} M15 Bars ===[/bold gold1]")
+    console.print(f"\n[bold gold1]=== Testing Market: {symbol} ({spec['name']}) | {len(df)} {timeframe} Bars ===[/bold gold1]")
     
     for name, fn, color in strategies:
         metrics = engine.run(df=df, signal_fn=fn, strategy_name=name)
@@ -81,15 +82,15 @@ def evaluate_market_strategies(
     }
 
 
-def run_cross_market_study(initial_balance: float = 10000.0) -> Dict[str, Any]:
+def run_cross_market_study(initial_balance: float = 10000.0, timeframe: str = "M15") -> Dict[str, Any]:
     """
     Runs full comparative study across Gold (XAUUSD), Bitcoin (BTCUSD), and Ethereum (ETHUSD).
     """
     markets = ["XAUUSD", "BTCUSD", "ETHUSD"]
     study_results = {}
-    
+
     for m in markets:
-        study_results[m] = evaluate_market_strategies(m, initial_balance=initial_balance)
+        study_results[m] = evaluate_market_strategies(m, initial_balance=initial_balance, timeframe=timeframe)
         
     # Render Master Multi-Asset Leaderboard
     table = Table(

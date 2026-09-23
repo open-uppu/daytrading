@@ -217,3 +217,25 @@ def test_load_historical_data_m30_and_d1_use_correct_yahoo_intervals(monkeypatch
 
     assert calls[0] == {"interval": "30m", "range_str": "60d"}
     assert calls[1] == {"interval": "1d", "range_str": "730d"}
+
+
+def test_evaluate_market_strategies_forwards_timeframe(monkeypatch):
+    """evaluate_market_strategies must pass its own timeframe argument into
+    load_historical_data instead of the hardcoded "M15" it used before this
+    change -- otherwise --timeframe=M30 silently backtests M15 bars."""
+    import backtest.run_cross_market_comparison as cross_market
+
+    captured = {}
+
+    def fake_load(symbol, timeframe="M15", **kwargs):
+        captured["timeframe"] = timeframe
+        return generate_fallback_gold_data(bars=100)
+
+    monkeypatch.setattr(cross_market, "load_historical_data", fake_load)
+
+    cross_market.evaluate_market_strategies(symbol="XAUUSD", timeframe="M30")
+    assert captured["timeframe"] == "M30"
+
+    # Default stays M15 when the caller doesn't opt in.
+    cross_market.evaluate_market_strategies(symbol="XAUUSD")
+    assert captured["timeframe"] == "M15"
