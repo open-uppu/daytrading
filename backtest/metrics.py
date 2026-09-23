@@ -24,12 +24,22 @@ def calculate_performance_metrics(
     total_trades = len(trades)
     if total_trades == 0:
         return {
-            "total_trades": 0,
+            "initial_balance": initial_balance,
+            "final_equity": round(final_equity, 2),
             "net_profit": 0.0,
             "total_return_pct": 0.0,
+            "total_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "break_evens": 0,
             "win_rate_pct": 0.0,
             "profit_factor": 0.0,
+            "max_drawdown_usd": 0.0,
             "max_drawdown_pct": 0.0,
+            "avg_win": 0.0,
+            "avg_loss": 0.0,
+            "total_trading_days": len(daily_pnls),
+            "days_hit_3pct_target": 0,
             "daily_target_achievement_pct": 0.0,
             "sharpe_ratio": 0.0
         }

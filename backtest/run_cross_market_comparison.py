@@ -46,7 +46,10 @@ def evaluate_market_strategies(
         daily_target_pct=0.03,
         daily_max_loss_pct=0.02,
         spread=spec["typical_spread"],
-        contract_size=spec["contract_size"]
+        contract_size=spec["contract_size"],
+        min_sl_dist=spec.get("min_sl_dist", 0.5),
+        price_precision=spec.get("price_precision", 2),
+        breakeven_buffer=spec.get("breakeven_buffer", 0.20)
     )
     
     strategies = [

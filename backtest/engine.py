@@ -23,7 +23,10 @@ class BacktestEngine:
         daily_target_pct: float = 0.03,
         daily_max_loss_pct: float = 0.02,
         spread: float = 0.25,
-        contract_size: float = 100.0
+        contract_size: float = 100.0,
+        min_sl_dist: float = 0.5,
+        price_precision: int = 2,
+        breakeven_buffer: float = 0.20
     ):
         self.initial_balance = initial_balance
         self.risk_per_trade_pct = risk_per_trade_pct
@@ -31,6 +34,28 @@ class BacktestEngine:
         self.daily_max_loss_pct = daily_max_loss_pct
         self.spread = spread
         self.contract_size = contract_size
+        # Absolute-dollar SL/TP validity floor. Default 0.5 is tuned for Gold's
+        # price scale and preserves exact prior behavior for XAUUSD/BTCUSD/ETHUSD.
+        # A market whose price scale differs a lot (e.g. forex pairs ~1.0-1.3,
+        # natural gas ~2-4) needs a much smaller floor or every signal gets
+        # rejected here regardless of strategy.
+        self.min_sl_dist = min_sl_dist
+        # Default 2 preserves exact prior behavior for Gold/BTC/ETH-scale prices.
+        # A forex pair (~1.08, 5 decimals) rounded to 2 loses up to ~0.005 --
+        # bigger than the entire SL distance on a tiny pip-scale stop, which
+        # desyncs the stored entry_price from the real fill and makes every
+        # trade look stopped-out almost immediately.
+        self.price_precision = price_precision
+        # Absolute-dollar breakeven-stop offset. Default 0.20 is tuned for
+        # Gold's price scale and preserves exact prior behavior for
+        # XAUUSD/BTCUSD/ETHUSD/XAGUSD/XPTUSD/UKOIL. On a forex pair
+        # (~1.0-1.3) this default is ~2000 pips -- the breakeven-move check
+        # (line ~104 below) then sets a "stop" the market can never realistically
+        # reach on the correct side, so the SL/TP trigger check treats it as an
+        # immediate, fabricated fill on the FAVORABLE side (confirmed: EURUSD
+        # SELL trades exited exactly at entry-0.20 with pnl == lots*100000*0.20,
+        # mislabeled "SL_HIT" while actually a phantom $100,000 win).
+        self.breakeven_buffer = breakeven_buffer
 
     def run(
         self,
@@ -85,10 +110,10 @@ class BacktestEngine:
                 # Trailing Break-Even Check: If profit reached 1.0R, move SL to entry
                 sl_dist = abs(entry_p - open_pos['initial_sl'])
                 if pos_type == "BUY" and (high - entry_p) >= sl_dist and sl_p < entry_p:
-                    open_pos['sl'] = entry_p + 0.20  # break-even + buffer
+                    open_pos['sl'] = entry_p + self.breakeven_buffer  # break-even + buffer
                     sl_p = open_pos['sl']
                 elif pos_type == "SELL" and (entry_p - low) >= sl_dist and sl_p > entry_p:
-                    open_pos['sl'] = entry_p - 0.20
+                    open_pos['sl'] = entry_p - self.breakeven_buffer
                     sl_p = open_pos['sl']
 
                 # Check SL / TP Triggers
@@ -157,7 +182,7 @@ class BacktestEngine:
                     sl_dist = abs(curr_close - sl)
                     tp_dist = abs(curr_close - tp)
                     
-                    if sl_dist > 0.5 and tp_dist > 0.5:
+                    if sl_dist > self.min_sl_dist and tp_dist > self.min_sl_dist:
                         rr = tp_dist / sl_dist
                         if rr >= 1.4:  # Minimum valid RR
                             # Calculate Lot Size (1% equity risk)
@@ -171,7 +196,7 @@ class BacktestEngine:
                                 "ticket": ticket_counter,
                                 "type": action,
                                 "entry_time": str(timestamp),
-                                "entry_price": round(fill_price, 2),
+                                "entry_price": round(fill_price, self.price_precision),
                                 "sl": sl,
                                 "initial_sl": sl,
                                 "tp": tp,

@@ -145,6 +145,24 @@ def cmd_journal(args):
             console.print(Panel(mistakes_file.read_text(), title=f"{asset.upper()} Mistakes Log ({mistakes_file.name})", border_style="cyan"))
 
 
+# Maps a --market CLI value (full symbol or shorthand) to its canonical symbol.
+# The M15 multi-strategy comparison path (evaluate_market_strategies) is
+# symbol-generic already; the M5 high-frequency scalper is not (see
+# run_single_asset_m5_backtest) -- it only has tuned behavior for these three.
+MARKET_ALIASES = {
+    "gold": "XAUUSD", "xauusd": "XAUUSD",
+    "btc": "BTCUSD", "btcusd": "BTCUSD",
+    "eth": "ETHUSD", "ethusd": "ETHUSD",
+    "silver": "XAGUSD", "xagusd": "XAGUSD",
+    "platinum": "XPTUSD", "xptusd": "XPTUSD",
+    "eur": "EURUSD", "eurusd": "EURUSD",
+    "gbp": "GBPUSD", "gbpusd": "GBPUSD",
+    "brent": "UKOIL", "ukoil": "UKOIL",
+    "gas": "XNGUSD", "naturalgas": "XNGUSD", "xngusd": "XNGUSD",
+}
+M5_TUNED_SYMBOLS = {"XAUUSD", "BTCUSD", "ETHUSD"}
+
+
 def cmd_backtest(args):
     """Runs backtesting across single asset or full cross-market multi-asset comparison."""
     if getattr(args, "ml", False):
@@ -154,14 +172,23 @@ def cmd_backtest(args):
 
     market = args.market.lower()
     tf = getattr(args, "timeframe", "M5").upper()
-    
+
+    if tf == "M5" and market != "all" and MARKET_ALIASES.get(market, market.upper()) not in M5_TUNED_SYMBOLS:
+        sym = MARKET_ALIASES.get(market, market.upper())
+        console.print(
+            f"[bold red]M5 scalper has no tuned behavior for {sym} yet[/bold red] "
+            f"(only Gold/BTC/ETH are tuned -- see run_single_asset_m5_backtest). "
+            f"Run without --timeframe=M5 first to find its winning M15 strategy."
+        )
+        return
+
     if tf == "M5":
         from backtest.run_m5_backtest import run_m5_squad_backtest, run_single_asset_m5_backtest
         if market == "all":
             run_m5_squad_backtest(initial_balance=args.balance)
             return
         else:
-            sym = "XAUUSD" if market in ["gold", "xauusd"] else ("BTCUSD" if market in ["btc", "btcusd"] else "ETHUSD")
+            sym = MARKET_ALIASES.get(market, market.upper())
             res = run_single_asset_m5_backtest(symbol=sym, initial_balance=args.balance)
             color_ret = "green" if res['total_return_pct'] >= 0 else "red"
             console.print(Panel(
@@ -188,7 +215,7 @@ def cmd_backtest(args):
         run_all_strategies(initial_balance=args.balance, save_chart=True)
     else:
         from backtest.run_cross_market_comparison import evaluate_market_strategies
-        symbol = "BTCUSD" if market in ["btc", "btcusd"] else "ETHUSD"
+        symbol = MARKET_ALIASES.get(market, market.upper())
         console.print(f"[bold cyan]Running {symbol} Strategy Comparison...[/bold cyan]")
         res = evaluate_market_strategies(symbol=symbol, initial_balance=args.balance)
         win = res["winner"]
@@ -249,7 +276,13 @@ def main():
 
     # Backtest command
     bt_parser = subparsers.add_parser("backtest", help="Run strategy backtests and comparative leaderboards")
-    bt_parser.add_argument("--market", default="all", choices=["all", "gold", "btc", "eth", "xauusd", "btcusd", "ethusd"], help="Market to test")
+    bt_parser.add_argument(
+        "--market", default="all",
+        choices=["all", "gold", "btc", "eth", "xauusd", "btcusd", "ethusd",
+                 "silver", "xagusd", "platinum", "xptusd", "eur", "eurusd",
+                 "gbp", "gbpusd", "brent", "ukoil", "gas", "naturalgas", "xngusd"],
+        help="Market to test"
+    )
     bt_parser.add_argument("--timeframe", default="M5", choices=["M5", "M15"], help="Timeframe for backtesting (default M5)")
     bt_parser.add_argument("--balance", type=float, default=10000.0, help="Initial capital in USD")
     bt_parser.add_argument("--ml", action="store_true", help="Run Quant & ML Meta-Labeling benchmark targeting 80-85 percent Win Rate")
