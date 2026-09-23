@@ -34,7 +34,8 @@ class NaturalGasSpecialistAgent(BaseSpecialistAgent):
         journal_dir: Optional[Path] = None,
         timeframe: str = "M15",
         max_open_positions: Optional[int] = None,
-        min_entry_interval_sec: Optional[int] = None
+        min_entry_interval_sec: Optional[int] = None,
+        magic: Optional[int] = None
     ):
         spec = ASSET_SPECS["XNGUSD"]
         super().__init__(
@@ -51,7 +52,8 @@ class NaturalGasSpecialistAgent(BaseSpecialistAgent):
             journal_dir=journal_dir,
             strategy_type="trend",
             max_open_positions=max_open_positions,
-            min_entry_interval_sec=min_entry_interval_sec
+            min_entry_interval_sec=min_entry_interval_sec,
+            magic=magic
         )
 
     @property

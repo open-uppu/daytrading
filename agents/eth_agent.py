@@ -32,7 +32,8 @@ class EthSpecialistAgent(BaseSpecialistAgent):
         journal_dir: Optional[Path] = None,
         timeframe: str = "M15",
         max_open_positions: Optional[int] = None,
-        min_entry_interval_sec: Optional[int] = None
+        min_entry_interval_sec: Optional[int] = None,
+        magic: Optional[int] = None
     ):
         min_sl = 2.0 if timeframe == "M5" else 5.0
         strat_type = "trend" if timeframe == "M5" else "reversion"
@@ -50,7 +51,8 @@ class EthSpecialistAgent(BaseSpecialistAgent):
             journal_dir=journal_dir,
             strategy_type=strat_type,
             max_open_positions=max_open_positions,
-            min_entry_interval_sec=min_entry_interval_sec
+            min_entry_interval_sec=min_entry_interval_sec,
+            magic=magic
         )
 
     @property
