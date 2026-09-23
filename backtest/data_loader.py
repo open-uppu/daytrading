@@ -204,6 +204,10 @@ def load_historical_data(
             df = fetch_yahoo_candle_data(yahoo_sym, interval="1h", range_str="730d", price_precision=price_precision)
         elif timeframe.upper() == "M5":
             df = fetch_yahoo_candle_data(yahoo_sym, interval="5m", range_str="60d", price_precision=price_precision)
+        elif timeframe.upper() == "M30":
+            df = fetch_yahoo_candle_data(yahoo_sym, interval="30m", range_str="60d", price_precision=price_precision)
+        elif timeframe.upper() == "D1":
+            df = fetch_yahoo_candle_data(yahoo_sym, interval="1d", range_str="730d", price_precision=price_precision)
         else:
             df = fetch_yahoo_candle_data(yahoo_sym, interval="15m", range_str="60d", price_precision=price_precision)
             

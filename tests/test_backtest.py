@@ -190,3 +190,30 @@ def test_fetch_yahoo_forex_precision_preserves_sub_cent_movement(monkeypatch):
     df = fetch_yahoo_candle_data("EURUSD=X", price_precision=5)
     assert df["close"].tolist() == [1.14012, 1.14034, 1.14019]
     assert df["close"].nunique() == 3
+
+
+def test_load_historical_data_m30_and_d1_use_correct_yahoo_intervals(monkeypatch, tmp_path):
+    """M30/D1 must hit their own Yahoo interval, not silently fall through
+    to the M15 branch's interval="15m" (which is what happens today for
+    any timeframe string the if/elif chain doesn't recognize)."""
+    import backtest.data_loader as data_loader
+
+    monkeypatch.setattr(data_loader, "DATA_DIR", tmp_path)
+
+    calls = []
+
+    def fake_fetch(yahoo_symbol, interval="15m", range_str="60d", price_precision=2):
+        calls.append({"interval": interval, "range_str": range_str})
+        return pd.DataFrame({
+            "timestamp": pd.date_range("2026-01-01", periods=5, freq="D"),
+            "open": [1.0] * 5, "high": [1.0] * 5, "low": [1.0] * 5,
+            "close": [1.0] * 5, "volume": [100] * 5
+        })
+
+    monkeypatch.setattr(data_loader, "fetch_yahoo_candle_data", fake_fetch)
+
+    data_loader.load_historical_data(symbol="XAUUSD", timeframe="M30")
+    data_loader.load_historical_data(symbol="XAUUSD", timeframe="D1")
+
+    assert calls[0] == {"interval": "30m", "range_str": "60d"}
+    assert calls[1] == {"interval": "1d", "range_str": "730d"}
