@@ -119,6 +119,55 @@ def test_news_blackout_kill_switch_disables_gate(monkeypatch, temp_journal_dir):
     assert result["status"] != "NEWS_BLACKOUT_ACTIVE"
 
 
+def test_squad_manager_all_enables_seven_not_nine(tmp_path):
+    """'all' expands to the 7 registered specialists (gold/btc/eth + the 4
+    new markets with confirmed contract specs) -- ukoil/xng stay gated
+    behind explicit opt-in until their contract_size is verified in MT5."""
+    broker = PaperTradingBroker(initial_balance=10000.0)
+    squad = SquadManager(broker=broker, initial_balance=10000.0, agents_to_enable=["all"], journal_dir=tmp_path)
+    assert len(squad.specialists) == 7
+    assert "ukoil" not in squad.specialists
+    assert "xng" not in squad.specialists
+    assert set(squad.specialists.keys()) == {"gold", "btc", "eth", "xag", "gbp", "eur", "xpt"}
+
+
+def test_squad_manager_m5_default_still_runs_new_m15_only_agents(tmp_path):
+    """Live production runs the squad on M5 (see main.py's timeframe default).
+    The 6 new agents only have a validated M15 strategy -- they must always
+    run M15 regardless of the squad's own timeframe, not error every step()."""
+    broker = PaperTradingBroker(initial_balance=10000.0)
+    squad = SquadManager(broker=broker, initial_balance=10000.0, agents_to_enable=["all"], timeframe="M5", journal_dir=tmp_path)
+    assert squad.specialists["gold"].timeframe == "M5"
+    assert squad.specialists["xag"].timeframe == "M15"
+    assert squad.specialists["gbp"].timeframe == "M15"
+    assert squad.specialists["eur"].timeframe == "M15"
+    assert squad.specialists["xpt"].timeframe == "M15"
+    step_res = squad.step()
+    for key in ["xag", "gbp", "eur", "xpt"]:
+        assert step_res["specialist_results"][key]["status"] != "ERROR"
+
+
+def test_squad_manager_gated_specialist_reachable_by_explicit_name(tmp_path):
+    broker = PaperTradingBroker(initial_balance=10000.0)
+    squad = SquadManager(broker=broker, initial_balance=10000.0, agents_to_enable=["ukoil"], journal_dir=tmp_path)
+    assert "ukoil" in squad.specialists
+    assert len(squad.specialists) == 1
+
+
+def test_portfolio_open_risk_uses_real_contract_size_for_new_markets(monkeypatch):
+    """The old hardcoded 3-entry dict defaulted unknown symbols to contract_size=1.0.
+    A EURUSD position (real contract_size 100000) would have had its risk
+    under-counted by ~100,000x, silently disabling the max-loss circuit breaker."""
+    broker = PaperTradingBroker(initial_balance=10000.0)
+    squad = SquadManager(broker=broker, initial_balance=10000.0, agents_to_enable=["eur"])
+    monkeypatch.setattr(broker, "get_open_positions", lambda: [
+        {"symbol": "EURUSD", "open_price": 1.0800, "sl": 1.0790, "lots": 1.0}
+    ])
+    # True risk: 0.0010 distance * 1.0 lots * 100000 contract_size = $100
+    risk = squad._portfolio_open_risk_usd()
+    assert risk == pytest.approx(100.0, rel=0.01)  # would be $0.001 under the old 1.0 fallback
+
+
 def test_squad_manager_orchestration():
     broker = PaperTradingBroker(initial_balance=10000.0)
     squad = SquadManager(

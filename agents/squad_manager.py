@@ -3,7 +3,8 @@ Squad Manager: Master Coordinator for Multi-Asset Specialist Agents.
 Orchestrates Gold, Bitcoin, and Ethereum specialists with a unified Portfolio 3% Daily Target Lock.
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple, Type
+from pathlib import Path
 import time
 import logging
 from datetime import datetime, timezone, date
@@ -18,13 +19,44 @@ from mt4.paper_broker import PaperTradingBroker
 from mt5.bridge_server import MT5BridgeBroker
 from mt4.bridge_server import MT4BridgeBroker
 from risk.manager import day_baseline
+from backtest.data_loader import ASSET_SPECS
 from agents.gold_agent import GoldSpecialistAgent
 from agents.btc_agent import BtcSpecialistAgent
 from agents.eth_agent import EthSpecialistAgent
+from agents.xag_agent import SilverSpecialistAgent
+from agents.gbp_agent import GbpSpecialistAgent
+from agents.eur_agent import EurSpecialistAgent
+from agents.xpt_agent import PlatinumSpecialistAgent
+from agents.ukoil_agent import UkoilSpecialistAgent
+from agents.xng_agent import NaturalGasSpecialistAgent
 from agents.base_agent import BaseSpecialistAgent
 
 logger = logging.getLogger("squad_manager")
 console = Console()
+
+# key -> (AgentClass, journal-subdir name, forced_timeframe). "all" expands to
+# every entry here. ukoil/xng have an unconfirmed contract_size (see their
+# agent module docstrings) so they live in GATED_SPECIALISTS instead:
+# reachable only by explicit --agent=ukoil / --agent=xng, never by "all".
+#
+# forced_timeframe=None means "use whatever timeframe the squad was started
+# with" (gold/btc/eth support both M5 and M15). The 6 new agents only have a
+# validated M15 strategy, so their forced_timeframe is always "M15" --
+# otherwise a squad started on M5 (today's live production default) would
+# make every one of them raise NotImplementedError on its first step().
+SPECIALIST_REGISTRY: Dict[str, Tuple[Type[BaseSpecialistAgent], str, Optional[str]]] = {
+    "gold": (GoldSpecialistAgent, "xauusd", None),
+    "btc": (BtcSpecialistAgent, "btcusd", None),
+    "eth": (EthSpecialistAgent, "ethusd", None),
+    "xag": (SilverSpecialistAgent, "xagusd", "M15"),
+    "gbp": (GbpSpecialistAgent, "gbpusd", "M15"),
+    "eur": (EurSpecialistAgent, "eurusd", "M15"),
+    "xpt": (PlatinumSpecialistAgent, "xptusd", "M15"),
+}
+GATED_SPECIALISTS: Dict[str, Tuple[Type[BaseSpecialistAgent], str, Optional[str]]] = {
+    "ukoil": (UkoilSpecialistAgent, "ukoil", "M15"),
+    "xng": (NaturalGasSpecialistAgent, "xngusd", "M15"),
+}
 
 
 class SquadManager:
@@ -39,7 +71,8 @@ class SquadManager:
         broker_mode: str = "paper",
         initial_balance: Optional[float] = None,
         agents_to_enable: Optional[List[str]] = None,
-        timeframe: str = "M5"
+        timeframe: str = "M5",
+        journal_dir: Optional[Path] = None
     ):
         self.broker_mode = broker_mode or config.broker_mode
         self.initial_balance = initial_balance or config.initial_balance
@@ -85,42 +118,49 @@ class SquadManager:
         # 2. Portfolio-Level Session & 3% Profit Target Tracker
         self.session_date: date = datetime.now(timezone.utc).date()
         self.starting_portfolio_balance: float = self._day_baseline(self.initial_balance)
-        self.target_pct: float = config.daily_target_pct  # 3.0%
-        self.max_loss_pct: float = config.daily_max_loss_pct  # -2.0%
+        self.target_pct: float = config.daily_target_pct  # 3.0% soft: specialists derisk, portfolio keeps trading
+        self.hard_target_pct: float = config.daily_target_hard_pct  # 10.0% hard: locks all trading
+        self.max_loss_pct: float = config.daily_max_loss_pct  # -3.0%
         self.target_profit_usd: float = self.starting_portfolio_balance * self.target_pct
+        self.hard_target_profit_usd: float = self.starting_portfolio_balance * self.hard_target_pct
         self.max_loss_usd: float = self.starting_portfolio_balance * self.max_loss_pct
 
         # 3. Instantiate Specialist Agents
         self.specialists: Dict[str, BaseSpecialistAgent] = {}
         raw_enabled = agents_to_enable or ["gold", "btc", "eth"]
-        enabled = []
+        enabled = set()
         for a in raw_enabled:
             al = a.lower()
             if al == "duo":
-                enabled.extend(["gold", "btc"])
+                enabled.update(["gold", "btc"])
+            elif al == "all":
+                enabled.update(SPECIALIST_REGISTRY.keys())
             else:
-                enabled.append(al)
-        
-        if "gold" in enabled or "xauusd" in enabled:
-            self.specialists["gold"] = GoldSpecialistAgent(
-                broker=self.broker,
-                broker_mode=self.broker_mode,
-                initial_balance=self.initial_balance,
-                timeframe=self.timeframe
+                enabled.add(al)
+
+        # A symbol-name alias (e.g. "xauusd") still resolves to its registry key.
+        symbol_to_key = {spec[1]: key for key, spec in {**SPECIALIST_REGISTRY, **GATED_SPECIALISTS}.items()}
+        resolved = {symbol_to_key.get(e, e) for e in enabled}
+
+        all_specialists = {**SPECIALIST_REGISTRY, **GATED_SPECIALISTS}
+        gated_requested = resolved & set(GATED_SPECIALISTS.keys())
+        if gated_requested:
+            logger.warning(
+                "[Squad Manager] %s has an unconfirmed contract_size (see its agent module docstring) -- "
+                "excluded from 'all', running only because explicitly requested.",
+                ", ".join(sorted(gated_requested))
             )
-        if "btc" in enabled or "btcusd" in enabled:
-            self.specialists["btc"] = BtcSpecialistAgent(
+
+        for key in resolved:
+            if key not in all_specialists:
+                continue
+            agent_cls, journal_subdir, forced_timeframe = all_specialists[key]
+            self.specialists[key] = agent_cls(
                 broker=self.broker,
                 broker_mode=self.broker_mode,
                 initial_balance=self.initial_balance,
-                timeframe=self.timeframe
-            )
-        if "eth" in enabled or "ethusd" in enabled:
-            self.specialists["eth"] = EthSpecialistAgent(
-                broker=self.broker,
-                broker_mode=self.broker_mode,
-                initial_balance=self.initial_balance,
-                timeframe=self.timeframe
+                timeframe=forced_timeframe or self.timeframe,
+                journal_dir=(journal_dir / journal_subdir) if journal_dir else None
             )
 
         if self.broker_mode == "mt5" and isinstance(self.broker, MT5BridgeBroker):
@@ -153,6 +193,7 @@ class SquadManager:
             acc = self.broker.get_account_info()
             self.starting_portfolio_balance = self._day_baseline(acc["balance"])
             self.target_profit_usd = self.starting_portfolio_balance * self.target_pct
+            self.hard_target_profit_usd = self.starting_portfolio_balance * self.hard_target_pct
             self.max_loss_usd = self.starting_portfolio_balance * self.max_loss_pct
 
     def get_portfolio_daily_pnl(self) -> Dict[str, Any]:
@@ -186,8 +227,9 @@ class SquadManager:
         equity_return_pct = round((equity_pnl / self.starting_portfolio_balance) * 100.0, 2) if self.starting_portfolio_balance > 0 else 0.0
 
         target_reached = daily_return_pct >= (self.target_pct * 100.0)
+        hard_target_reached = daily_return_pct >= (self.hard_target_pct * 100.0)
         max_loss_reached = equity_return_pct <= -(self.max_loss_pct * 100.0)
-        
+
         return {
             "starting_balance": self.starting_portfolio_balance,
             "current_balance": current_balance,
@@ -198,7 +240,9 @@ class SquadManager:
             "equity_return_pct": equity_return_pct,
             "target_pct": self.target_pct * 100.0,
             "target_profit_usd": self.target_profit_usd,
+            "hard_target_profit_usd": self.hard_target_profit_usd,
             "target_reached": target_reached,
+            "hard_target_reached": hard_target_reached,
             "max_loss_reached": max_loss_reached,
             "total_trades_today": total_trades_today,
             "total_wins_today": total_wins_today,
@@ -232,15 +276,19 @@ class SquadManager:
             f"| ไม้ที่เปิดค้าง: {len(self.broker.get_open_positions())} ไม้"
         )
 
-        # Check Portfolio-Level Target Lock
-        if portfolio_status["target_reached"]:
-            logger.info(f"[Squad Manager] PORTFOLIO 3% TARGET ACHIEVED! (+{portfolio_status['daily_return_pct']:.2f}%). Halting all squad trades.")
+        # Check Portfolio-Level Target Lock (soft target only derisks each
+        # specialist individually via their own session_tracker; only the
+        # hard target stops the whole squad).
+        if portfolio_status["hard_target_reached"]:
+            logger.info(f"[Squad Manager] PORTFOLIO {self.hard_target_pct*100:.0f}% HARD TARGET ACHIEVED! (+{portfolio_status['daily_return_pct']:.2f}%). Halting all squad trades.")
             return {
                 "iteration": self.iteration_count,
                 "status": "PORTFOLIO_DAILY_TARGET_REACHED",
                 "portfolio": portfolio_status,
                 "specialist_results": {}
             }
+        elif portfolio_status["target_reached"]:
+            logger.info(f"[Squad Manager] Portfolio soft {self.target_pct*100:.0f}% target passed (+{portfolio_status['daily_return_pct']:.2f}%); specialists derisked, still trading toward {self.hard_target_pct*100:.0f}% hard target.")
 
         if portfolio_status["max_loss_reached"]:
             close_results = self._close_all_positions()
@@ -271,8 +319,14 @@ class SquadManager:
         }
 
     def _portfolio_open_risk_usd(self) -> float:
-        """Estimate worst-case loss to each active SL across the portfolio."""
-        contract_sizes = {"XAUUSD": 100.0, "BTCUSD": 1.0, "ETHUSD": 1.0}
+        """Estimate worst-case loss to each active SL across the portfolio.
+        contract_sizes is derived from ASSET_SPECS (real broker contract facts)
+        rather than a hand-maintained table -- a 3-entry hardcoded dict here
+        once defaulted every unlisted symbol to contract_size=1.0, silently
+        under-counting a EURUSD/GBPUSD position's risk by ~100,000x and a
+        XAGUSD position's by ~5,000x, which could let the portfolio blow
+        through its daily max-loss cutoff undetected."""
+        contract_sizes = {sym: spec["contract_size"] for sym, spec in ASSET_SPECS.items()}
         total = 0.0
         for pos in self.broker.get_open_positions():
             symbol = str(pos.get("symbol", "")).upper()
@@ -334,10 +388,12 @@ class SquadManager:
             sym_pos = [p for p in open_positions if p.get("symbol") == agent.symbol]
             if sym_pos:
                 status_text = f"Holding ({len(sym_pos)} pos)"
-            elif summ.get("target_reached"):
+            elif summ.get("hard_target_reached"):
                 status_text = "Target Lock"
             elif summ.get("max_loss_hit"):
                 status_text = "Loss Cutoff"
+            elif summ.get("target_reached"):
+                status_text = "Derisked"
             else:
                 status_text = "Scanning"
             
@@ -377,9 +433,12 @@ class SquadManager:
                 step_res = self.step()
                 self.display_dashboard()
                 
-                if step_res["status"] in ["PORTFOLIO_DAILY_TARGET_REACHED", "PORTFOLIO_MAX_LOSS_CUTOFF", "BRIDGE_UNAVAILABLE"]:
+                if step_res["status"] == "BRIDGE_UNAVAILABLE":
                     console.print(f"[bold yellow]Squad loop paused: {step_res['status']}[/bold yellow]")
                     break
+
+                if step_res["status"] in ["PORTFOLIO_DAILY_TARGET_REACHED", "PORTFOLIO_MAX_LOSS_CUTOFF"]:
+                    console.print(f"[bold yellow]Squad idle ({step_res['status']}): no new trades, still monitoring.[/bold yellow]")
                     
                 if max_iterations and self.iteration_count >= max_iterations:
                     console.print(f"[bold cyan]Reached max requested iterations ({max_iterations}). Stopping.[/bold cyan]")

@@ -76,7 +76,8 @@ ASSET_SPECS: Dict[str, Dict[str, Any]] = {
         "typical_spread": 1.50,
         "min_lot": 0.01,
         "price_precision": 2,
-        "market_type": "metals"
+        "market_type": "metals",
+        "min_sl_dist": 0.5         # engine.py default -- verified non-zero trade counts at this floor
     },
     "EURUSD": {
         "name": "Euro/US Dollar",
@@ -115,7 +116,8 @@ ASSET_SPECS: Dict[str, Dict[str, Any]] = {
         "typical_spread": 0.03,
         "min_lot": 0.01,
         "price_precision": 2,
-        "market_type": "energy"
+        "market_type": "energy",
+        "min_sl_dist": 0.5          # engine.py default -- verified non-zero trade counts at this floor
     },
     "XNGUSD": {
         "name": "Natural Gas",

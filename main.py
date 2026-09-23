@@ -83,13 +83,13 @@ def cmd_analyze(args):
 def cmd_loop(args):
     """Runs the autonomous trading loop with the Multi-Asset Specialist Squad or single agent."""
     agents_map = {
-        "all": ["gold", "btc", "eth"],
+        "all": ["all"],  # SquadManager expands this to every SPECIALIST_REGISTRY key (gold/btc/eth + the 4 confirmed new markets, not ukoil/xng)
         "duo": ["gold", "btc"],
-        "gold": ["gold"],
-        "btc": ["btc"],
-        "eth": ["eth"]
+        "gold": ["gold"], "btc": ["btc"], "eth": ["eth"],
+        "xag": ["xag"], "gbp": ["gbp"], "eur": ["eur"], "xpt": ["xpt"],
+        "ukoil": ["ukoil"], "xng": ["xng"],
     }
-    selected_agents = agents_map.get(args.agent.lower(), ["gold", "btc", "eth"])
+    selected_agents = agents_map.get(args.agent.lower(), ["all"])
     
     console.print(Panel(
         f"[bold cyan]Agentic Multi-Asset Specialist Squad[/bold cyan]\n"
@@ -255,7 +255,11 @@ def main():
     # Loop / Run command
     for cmd_alias in ["loop", "run"]:
         loop_parser = subparsers.add_parser(cmd_alias, help="Run autonomous trading loop (squad or specialist)")
-        loop_parser.add_argument("--agent", default="all", choices=["all", "duo", "gold", "btc", "eth"], help="Specialist agent to run")
+        loop_parser.add_argument(
+            "--agent", default="all",
+            choices=["all", "duo", "gold", "btc", "eth", "xag", "gbp", "eur", "xpt", "ukoil", "xng"],
+            help="Specialist agent to run (ukoil/xng need explicit selection -- excluded from 'all', see agents/ukoil_agent.py)"
+        )
         loop_parser.add_argument("--mode", default="mt5", choices=["mt5", "paper", "mt4"], help="Broker execution mode")
         loop_parser.add_argument("--balance", type=float, default=10000.0, help="Initial account balance")
         loop_parser.add_argument("--interval", type=int, default=5, help="Loop interval in seconds")
