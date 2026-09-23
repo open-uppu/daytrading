@@ -64,9 +64,16 @@ def get_news_window_status(
 ```
 
 Caching reuses `get_cached_value` from `core/sentiment.py` directly (no
-duplicate cache logic). Cache file: `journal/ff_calendar_cache.json` — one
-shared file, since all three symbols quote in USD and watch the same
-calendar (no per-symbol calendar needed).
+duplicate cache logic). Cache file: `journal/<symbol>/ff_calendar_cache.json`
+— per-agent, not shared, matching the existing `daily_trade_state_file`
+convention. A single shared file would need locking (`get_cached_value` isn't
+safe for concurrent writers) and would break per-test isolation; a redundant
+fetch per agent per TTL window against a free, keyless endpoint is a fine
+tradeoff. Also, `fetch_ff_calendar`'s event `date` field is an ISO8601
+string, not a `datetime` object — the cache value must be JSON-serializable
+for `get_cached_value`'s `json.dumps`. `get_news_window_status` accepts
+either a `str` or a `datetime` for `date` (parses strings on the fly), so
+tests can build fixtures with plain `datetime` objects.
 
 ### Config additions (`config.py`)
 
