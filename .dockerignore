@@ -1,9 +1,51 @@
+# Version Control
 .git
 .gitignore
-.pytest_cache
-__pycache__
-*.pyc
-*.pyo
-*.pyd
-.env.local
+.gitattributes
+
+# Python Caches & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# IDE & Editor Configurations
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 .DS_Store
+
+# Agentic & Local Scratch Dirs
+.superpowers/
+.claude/
+scratch/
+tmp/
+*.log
+
+# Sensitive environment configuration
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Local Data / Heavy Artifacts (mounted via docker-compose volumes if needed)
+artifacts/*.png
+data/*.csv
