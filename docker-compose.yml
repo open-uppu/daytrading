@@ -18,6 +18,7 @@ services:
       - ./artifacts:/app/artifacts
       - ./data:/app/data
       - ./mt5:/app/mt5
+      - ./frontend:/app/frontend
       - ./config.py:/app/config.py
       - ./main.py:/app/main.py
     command: ["python3", "main.py", "bridge"]
@@ -48,13 +49,14 @@ services:
       - ./core:/app/core
       - ./mt5:/app/mt5
       - ./mt4:/app/mt4
+      - ./frontend:/app/frontend
       - ./risk:/app/risk
       - ./learning:/app/learning
       - ./backtest:/app/backtest
       - ./main.py:/app/main.py
       - ./test_order.py:/app/test_order.py
       - ./config.py:/app/config.py
-    command: ["python3", "main.py", "run", "--agent=all", "--mode=mt5", "--interval=15", "--wait-for-live-data"]
+    command: ["python3", "main.py", "run", "--agent=all9", "--mode=mt5", "--interval=15", "--wait-for-live-data"]
 
   # 3. Standalone Paper Trading (No MT5 needed, runs autonomous simulation)
   paper:

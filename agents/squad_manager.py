@@ -428,7 +428,7 @@ class SquadManager:
             else:
                 status_text = "Scanning"
             
-            pnl = summ.get("closed_pnl_usd", 0.0)
+            pnl = summ.get("closed_pnl_today", 0.0)
             pnl_style = "green" if pnl >= 0 else "red"
             pnl_str = f"[{pnl_style}]${pnl:+.2f}[/{pnl_style}]"
             trades_str = f"{summ.get('trades_count', 0)} ({summ.get('wins', 0)}/{summ.get('losses', 0)})"
