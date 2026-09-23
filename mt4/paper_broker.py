@@ -91,16 +91,17 @@ class PaperTradingBroker(BaseBroker):
         lots: float,
         sl: float,
         tp: float,
-        comment: str = ""
+        comment: str = "",
+        magic: int = 888999
     ) -> Dict[str, Any]:
         """Executes a market order with simulated spread."""
         bid = self.current_price - (self.spread / 2)
         ask = self.current_price + (self.spread / 2)
-        
+
         fill_price = ask if order_type == "BUY" else bid
         ticket = self.next_ticket
         self.next_ticket += 1
-        
+
         position = {
             "ticket": ticket,
             "symbol": symbol,
@@ -111,34 +112,35 @@ class PaperTradingBroker(BaseBroker):
             "sl": round(sl, 2),
             "tp": round(tp, 2),
             "comment": comment,
+            "magic": magic,
             "unrealized_pnl": 0.0
         }
-        
+
         self.open_positions[ticket] = position
         logger.info(f"[PAPER] Opened #{ticket} {order_type} {lots} lots at {fill_price:.2f} (SL: {sl:.2f}, TP: {tp:.2f})")
         return {"status": "SUCCESS", "ticket": ticket, "fill_price": fill_price}
 
-    def close_order(self, ticket: int, exit_reason: str = "MANUAL_CLOSE") -> Dict[str, Any]:
+    def close_order(self, ticket: int, exit_reason: str = "MANUAL_CLOSE", magic: Optional[int] = None) -> Dict[str, Any]:
         """Closes an open order and updates realized account balance."""
         if ticket not in self.open_positions:
             return {"status": "ERROR", "message": f"Position #{ticket} not found"}
-            
+
         pos = self.open_positions.pop(ticket)
         bid = self.current_price - (self.spread / 2)
         ask = self.current_price + (self.spread / 2)
         close_price = bid if pos["type"] == "BUY" else ask
-        
+
         # Calculate Realized PnL
         if pos["type"] == "BUY":
             pnl_usd = (close_price - pos["open_price"]) * pos["lots"] * self.contract_size
         else:
             pnl_usd = (pos["open_price"] - close_price) * pos["lots"] * self.contract_size
-            
+
         pnl_usd = round(pnl_usd, 2)
         pnl_pct = round((pnl_usd / self.balance) * 100.0, 2)
         self.balance += pnl_usd
         self._update_equity()
-        
+
         closed_record = {
             "ticket": ticket,
             "symbol": pos["symbol"],
@@ -153,15 +155,17 @@ class PaperTradingBroker(BaseBroker):
             "pnl_usd": pnl_usd,
             "pnl_pct": pnl_pct,
             "exit_reason": exit_reason,
-            "comment": pos["comment"]
+            "comment": pos["comment"],
+            "magic": pos.get("magic", 888999)
         }
-        
+
         self.closed_orders.append(closed_record)
         self.recently_closed_orders.append(closed_record)
         logger.info(f"[PAPER] Closed #{ticket} at {close_price:.2f} | Reason: {exit_reason} | PnL: ${pnl_usd:+.2f}")
         return {"status": "SUCCESS", "closed_order": closed_record}
 
-    def modify_order(self, ticket: int, sl: Optional[float] = None, tp: Optional[float] = None) -> Dict[str, Any]:
+    def modify_order(self, ticket: int, sl: Optional[float] = None, tp: Optional[float] = None,
+                      magic: Optional[int] = None) -> Dict[str, Any]:
         """Updates SL/TP of an active position."""
         if ticket not in self.open_positions:
             return {"status": "ERROR", "message": "Position not found"}
@@ -180,9 +184,14 @@ class PaperTradingBroker(BaseBroker):
         """Returns closed orders history."""
         return self.closed_orders
 
-    def consume_recently_closed(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Pops and returns closed orders that haven't been reflected upon yet (only `symbol`'s when given)."""
-        recent = [o for o in self.recently_closed_orders if not symbol or o.get("symbol") == symbol]
+    def consume_recently_closed(self, symbol: Optional[str] = None, magic: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Pops and returns closed orders that haven't been reflected upon yet
+        (only `symbol`'s / `magic`'s when given)."""
+        recent = [
+            o for o in self.recently_closed_orders
+            if (not symbol or o.get("symbol") == symbol)
+            and (magic is None or o.get("magic") == magic)
+        ]
         self.recently_closed_orders[:] = [o for o in self.recently_closed_orders if o not in recent]
         return recent
 
@@ -205,17 +214,17 @@ class PaperTradingBroker(BaseBroker):
                 # Check TP first then SL
                 if new_high >= tp:
                     self.current_price = tp
-                    self.close_order(ticket, exit_reason="TP_HIT")
+                    self.close_order(ticket, exit_reason="TP_HIT", magic=pos.get("magic", 888999))
                 elif new_low <= sl:
                     self.current_price = sl
-                    self.close_order(ticket, exit_reason="SL_HIT")
+                    self.close_order(ticket, exit_reason="SL_HIT", magic=pos.get("magic", 888999))
             elif pos["type"] == "SELL":
                 if new_low <= tp:
                     self.current_price = tp
-                    self.close_order(ticket, exit_reason="TP_HIT")
+                    self.close_order(ticket, exit_reason="TP_HIT", magic=pos.get("magic", 888999))
                 elif new_high >= sl:
                     self.current_price = sl
-                    self.close_order(ticket, exit_reason="SL_HIT")
+                    self.close_order(ticket, exit_reason="SL_HIT", magic=pos.get("magic", 888999))
 
         self.current_price = new_close
         self._update_equity()

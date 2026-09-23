@@ -50,6 +50,26 @@ def test_paper_broker_order_lifecycle():
     assert broker.balance > 10000.0  # Profit credited
 
 
+def test_paper_broker_filters_recently_closed_by_magic():
+    broker = PaperTradingBroker(initial_balance=10000.0, symbol="XAUUSD")
+
+    entry = broker.current_price
+    res_a = broker.open_order(symbol="XAUUSD", order_type="BUY", lots=0.1,
+                               sl=entry - 5.0, tp=entry + 10.0, magic=888999)
+    res_b = broker.open_order(symbol="XAUUSD", order_type="BUY", lots=0.1,
+                               sl=entry - 5.0, tp=entry + 10.0, magic=888915)
+
+    # Close both by pushing price through both take-profits.
+    broker.simulate_price_update(new_high=entry + 11.0, new_low=entry, new_close=entry + 10.5)
+    assert len(broker.get_open_positions()) == 0
+
+    only_a = broker.consume_recently_closed(symbol="XAUUSD", magic=888999)
+    assert [o["ticket"] for o in only_a] == [res_a["ticket"]]
+
+    only_b = broker.consume_recently_closed(symbol="XAUUSD", magic=888915)
+    assert [o["ticket"] for o in only_b] == [res_b["ticket"]]
+
+
 def test_mt4_bridge_api():
     client = TestClient(app)
     

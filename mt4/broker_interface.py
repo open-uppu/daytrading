@@ -29,18 +29,20 @@ class BaseBroker(ABC):
         lots: float,
         sl: float,
         tp: float,
-        comment: str = ""
+        comment: str = "",
+        magic: Optional[int] = None
     ) -> Dict[str, Any]:
         """Submits a BUY or SELL market order."""
         pass
 
     @abstractmethod
-    def close_order(self, ticket: int) -> Dict[str, Any]:
+    def close_order(self, ticket: int, magic: Optional[int] = None) -> Dict[str, Any]:
         """Closes an open position by ticket."""
         pass
 
     @abstractmethod
-    def modify_order(self, ticket: int, sl: Optional[float] = None, tp: Optional[float] = None) -> Dict[str, Any]:
+    def modify_order(self, ticket: int, sl: Optional[float] = None, tp: Optional[float] = None,
+                      magic: Optional[int] = None) -> Dict[str, Any]:
         """Modifies SL and/or TP for an open position."""
         pass
 
