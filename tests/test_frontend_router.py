@@ -20,6 +20,12 @@ def test_frontend_mount_and_index():
     assert data["type"] == "snapshot"
     assert "account" in data
 
+    # Test static files served
+    res_dash = client.get("/static/js/dashboard.js")
+    assert res_dash.status_code == 200
+    assert "PilotfishDashboard" in res_dash.text
+    assert "connectWebSocket" in res_dash.text
+
 def test_websocket_connection_and_subscription():
     app = FastAPI()
     mount_frontend(app)
