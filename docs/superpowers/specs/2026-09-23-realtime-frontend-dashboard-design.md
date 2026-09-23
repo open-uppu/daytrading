@@ -29,10 +29,10 @@ flowchart TD
     end
 
     subgraph Browser_Client
-        StaticMount --> WebPage[index.html + dashboard.js]
+        StaticMount --> WebPage[frontend/static/index.html]
         WSManager <-->|WebSocket Full-Duplex| ClientWS[Browser WebSocket Client]
-        ClientWS --> ChartModule[TradingView Lightweight Chart v4]
-        ClientWS --> UIStore[Reactive UI State & DOM Updater]
+        ClientWS --> ChartModule[TradingView Lightweight Chart v4 - chart.js]
+        ClientWS --> UIStore[Reactive UI State & DOM Updater - dashboard.js]
         UIStore --> TopBar[Account Balance, Equity & Target Progress Bar]
         UIStore --> PositionsTable[Live Open Positions & Floating PnL]
         UIStore --> HistoryFeed[Today's Closed Trades History]
@@ -40,8 +40,25 @@ flowchart TD
     end
 ```
 
-### 2.1 Backend Architecture (`mt5/bridge_server.py`)
-- **FastAPI Integration**: Extends `mt5/bridge_server.py` without breaking existing MT5 EA telemetry endpoints (`/api/mt5/telemetry`, `/api/mt5/commands`, `/api/mt5/bars`, etc.).
+### 2.1 Clean Folder Isolation (`frontend/`)
+All dashboard assets and server integration are completely isolated in a dedicated `frontend/` directory:
+```
+frontend/
+├── __init__.py
+├── router.py             # FastAPI APIRouter (/ws/live, snapshot, subscription management)
+├── feed_provider.py      # Dual-mode data provider (MT5 live state + PaperTradingBroker fallback)
+└── static/
+    ├── index.html        # Dark terminal layout with Tailwind CSS & TV Lightweight Charts
+    ├── css/
+    │   └── terminal.css  # Bloomberg/TradingView terminal styling & status pulse badges
+    └── js/
+        ├── chart.js      # TradingView v4 candlestick setup, crosshair, and trade overlay
+        └── dashboard.js  # WebSocket handling, auto-reconnect, and reactive DOM binding
+```
+
+### 2.2 Backend Architecture & Integration
+- **Zero Invasiveness**: `mt5/bridge_server.py` simply includes the isolated router:
+  `from frontend.router import frontend_router, mount_frontend; mount_frontend(app)`
 - **WebSocket Hub (`/ws/live`)**:
   - Maintains active client connections (`set[WebSocket]`).
   - Broadcasts initial state snapshot immediately upon connection.
@@ -50,9 +67,10 @@ flowchart TD
   - Handles client subscription requests: `{"action": "subscribe", "symbol": "BTCUSD", "timeframe": "M5"}` to dynamically stream historical and live candle bars for the requested market.
 - **Dual Mode Support**:
   - When MT5 EA is connected, feeds live broker quotes, positions, and candles.
-  - When MT5 EA is not connected or in paper mode, automatically falls back to serving live market data and simulated positions from `PaperTradingBroker`.
+  - When MT5 EA is not connected or in paper mode, automatically falls back to serving live market data and simulated positions via `frontend/feed_provider.py`.
 - **Static Asset Serving**:
-  - Mounts `web/` directory at `/` serving `index.html`, `dashboard.js`, and `styles.css`.
+  - Mounts `frontend/static/` directory at `/` serving `index.html`, `js/`, and `css/`.
+
 
 ---
 
