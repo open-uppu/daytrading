@@ -35,13 +35,14 @@ logger = logging.getLogger("strategy_comparison")
 def run_all_strategies(
     df: pd.DataFrame = None,
     initial_balance: float = 10000.0,
-    save_chart: bool = True
+    save_chart: bool = True,
+    timeframe: str = "M15"
 ) -> List[Dict[str, Any]]:
     """
     Runs backtests for all strategies and returns sorted results list.
     """
     if df is None:
-        df = load_historical_data(timeframe="M15")
+        df = load_historical_data(timeframe=timeframe)
 
     engine = BacktestEngine(
         initial_balance=initial_balance,

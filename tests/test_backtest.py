@@ -239,3 +239,22 @@ def test_evaluate_market_strategies_forwards_timeframe(monkeypatch):
     # Default stays M15 when the caller doesn't opt in.
     cross_market.evaluate_market_strategies(symbol="XAUUSD")
     assert captured["timeframe"] == "M15"
+
+
+def test_run_all_strategies_forwards_timeframe_when_df_omitted(monkeypatch):
+    """The gold-only CLI path (main.py's `--market=gold` special case) has
+    its own independent load_historical_data call, separate from
+    evaluate_market_strategies -- it must honor --timeframe too."""
+    from backtest.run_comparison import run_all_strategies
+    import backtest.run_comparison as run_comparison
+
+    captured = {}
+
+    def fake_load(timeframe="M15", **kwargs):
+        captured["timeframe"] = timeframe
+        return generate_fallback_gold_data(bars=100)
+
+    monkeypatch.setattr(run_comparison, "load_historical_data", fake_load)
+
+    run_all_strategies(initial_balance=10000.0, save_chart=False, timeframe="M30")
+    assert captured["timeframe"] == "M30"
