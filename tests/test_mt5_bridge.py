@@ -393,7 +393,7 @@ def test_pop_recently_closed_without_magic_still_pops_whole_symbol():
     assert [o["ticket"] for o in bridge_server._mt5_state["recently_closed"]] == [3]
 
 
-def test_get_open_positions_in_process_reads_state_directly_never_network():
+def test_get_open_positions_in_process_reads_state_directly_never_network(monkeypatch):
     """
     Regression guard: unlike every other method on this class,
     get_open_positions() used to skip the `if not self.in_process` guard and
@@ -404,8 +404,17 @@ def test_get_open_positions_in_process_reads_state_directly_never_network():
 
     Mutate `_mt5_state["open_positions"]` directly (never via an HTTP
     telemetry POST) so this proves the in-process path reads the dict
-    in-process, without ever attempting the network branch.
+    in-process, without ever attempting the network branch. Patch
+    bridge_server.httpx.get itself (the exact name get_open_positions calls)
+    to fail the test if reached, so this doesn't rely on nothing being
+    listening on host:port -- it deterministically fails the moment the
+    network branch is attempted, on any machine.
     """
+    def _fail_if_called(*args, **kwargs):
+        pytest.fail("network attempted in in_process mode (httpx.get called)")
+
+    monkeypatch.setattr(bridge_server.httpx, "get", _fail_if_called)
+
     sentinel = [{"ticket": 999999999, "symbol": "__SENTINEL__", "magic": 1}]
     bridge_server._mt5_state["open_positions"] = sentinel
 
@@ -413,8 +422,13 @@ def test_get_open_positions_in_process_reads_state_directly_never_network():
     assert broker.get_open_positions() == sentinel
 
 
-def test_get_closed_orders_in_process_reads_state_directly_never_network():
+def test_get_closed_orders_in_process_reads_state_directly_never_network(monkeypatch):
     """Same guard as above, for get_closed_orders() / closed_orders."""
+    def _fail_if_called(*args, **kwargs):
+        pytest.fail("network attempted in in_process mode (httpx.get called)")
+
+    monkeypatch.setattr(bridge_server.httpx, "get", _fail_if_called)
+
     sentinel = [{"ticket": 888888888, "pnl_usd": 42.0}]
     bridge_server._mt5_state["closed_orders"] = sentinel
 
