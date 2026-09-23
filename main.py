@@ -273,16 +273,16 @@ def cmd_backtest(args):
     if market == "all":
         from backtest.run_cross_market_comparison import run_cross_market_study
         console.print("[bold cyan]Starting Full Cross-Market Research Study (Gold, BTC, ETH)...[/bold cyan]")
-        run_cross_market_study(initial_balance=args.balance)
+        run_cross_market_study(initial_balance=args.balance, timeframe=tf)
     elif market in ["gold", "xauusd"]:
         from backtest.run_comparison import run_all_strategies
         console.print("[bold gold1]Running Gold (XAUUSD) Strategy Comparison...[/bold gold1]")
-        run_all_strategies(initial_balance=args.balance, save_chart=True)
+        run_all_strategies(initial_balance=args.balance, save_chart=True, timeframe=tf)
     else:
         from backtest.run_cross_market_comparison import evaluate_market_strategies
         symbol = MARKET_ALIASES.get(market, market.upper())
         console.print(f"[bold cyan]Running {symbol} Strategy Comparison...[/bold cyan]")
-        res = evaluate_market_strategies(symbol=symbol, initial_balance=args.balance)
+        res = evaluate_market_strategies(symbol=symbol, initial_balance=args.balance, timeframe=tf)
         win = res["winner"]
         console.print(Panel(
             f"[bold green]Winner for {symbol}: {win['strategy_name']}[/bold green]\n"
@@ -372,7 +372,7 @@ def build_parser() -> argparse.ArgumentParser:
                  "gbp", "gbpusd", "brent", "ukoil", "gas", "naturalgas", "xngusd"],
         help="Market to test"
     )
-    bt_parser.add_argument("--timeframe", default="M5", choices=["M5", "M15"], help="Timeframe for backtesting (default M5)")
+    bt_parser.add_argument("--timeframe", default="M5", choices=["M5", "M15", "M30", "H1", "D1"], help="Timeframe for backtesting (default M5)")
     bt_parser.add_argument("--balance", type=float, default=10000.0, help="Initial capital in USD")
     bt_parser.add_argument("--ml", action="store_true", help="Run Quant & ML Meta-Labeling benchmark targeting 80-85 percent Win Rate")
     
