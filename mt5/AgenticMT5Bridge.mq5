@@ -388,6 +388,12 @@ void ExecuteCommand(string json)
       ulong cmdMagic = (ulong)ExtractDouble(json, "\"magic\":", (double)InpMagicNumber);
       string cmdId = ExtractString(json, "\"id\":\"", "\"");
 
+      if(!IsManagedMagic((long)cmdMagic))
+      {
+         ConfirmExecution(cmdId, "REJECTED", 0, "Unmanaged magic: " + IntegerToString(cmdMagic));
+         return;
+      }
+
       // Make sure the symbol exists and is subscribed in Market Watch.
       if(!SymbolSelect(cmdSymbol, true))
       {
