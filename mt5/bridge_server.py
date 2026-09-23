@@ -290,18 +290,19 @@ async def get_account_state():
 
 
 @app.get("/api/mt5/recently_closed")
-async def get_recently_closed(symbol: Optional[str] = None):
-    """Returns and clears recently closed orders (only `symbol`'s when given)."""
-    return {"recently_closed": _pop_recently_closed(symbol)}
+async def get_recently_closed(symbol: Optional[str] = None, magic: Optional[int] = None):
+    """Returns and clears recently closed orders (only `symbol`'s / `magic`'s when given)."""
+    return {"recently_closed": _pop_recently_closed(symbol, magic)}
 
 
-def _pop_recently_closed(symbol: Optional[str]) -> List[Dict[str, Any]]:
+def _pop_recently_closed(symbol: Optional[str], magic: Optional[int] = None) -> List[Dict[str, Any]]:
     queue = _mt5_state["recently_closed"]
-    if not symbol:
-        taken, kept = list(queue), []
-    else:
-        taken = [o for o in queue if str(o.get("symbol", "")).upper() == symbol.upper()]
-        kept = [o for o in queue if o not in taken]
+    taken = [
+        o for o in queue
+        if (not symbol or str(o.get("symbol", "")).upper() == symbol.upper())
+        and (magic is None or o.get("magic") == magic)
+    ]
+    kept = [o for o in queue if o not in taken]
     queue[:] = kept
     return taken
 
@@ -499,7 +500,8 @@ class MT5BridgeBroker(BaseBroker):
         tp: float,
         comment: str = "",
         await_confirm: bool = True,
-        confirm_timeout: float = 10.0
+        confirm_timeout: float = 10.0,
+        magic: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Queues an MQL5 trade order for the MT5 EA to execute.
@@ -520,6 +522,8 @@ class MT5BridgeBroker(BaseBroker):
             "tp": tp,
             "comment": comment or f"AgenticMT5_{order_type}"
         }
+        if magic is not None:
+            command["magic"] = magic
 
         response = self._queue_command(command)
         logger.info(
@@ -559,7 +563,8 @@ class MT5BridgeBroker(BaseBroker):
         self,
         ticket: int,
         await_confirm: bool = True,
-        confirm_timeout: float = 10.0
+        confirm_timeout: float = 10.0,
+        magic: Optional[int] = None
     ) -> Dict[str, Any]:
         """Queues a position close command for MT5 and waits for EA confirmation."""
         cmd_id = self._next_cmd_id("close")
@@ -569,6 +574,8 @@ class MT5BridgeBroker(BaseBroker):
             "action": "ORDER_CLOSE",
             "ticket": ticket
         }
+        if magic is not None:
+            command["magic"] = magic
 
         response = self._queue_command(command)
 
@@ -593,7 +600,8 @@ class MT5BridgeBroker(BaseBroker):
         sl: Optional[float] = None,
         tp: Optional[float] = None,
         await_confirm: bool = True,
-        confirm_timeout: float = 10.0
+        confirm_timeout: float = 10.0,
+        magic: Optional[int] = None
     ) -> Dict[str, Any]:
         """Queues an order modification for MT5 and waits for EA confirmation."""
         cmd_id = self._next_cmd_id("modify")
@@ -605,6 +613,8 @@ class MT5BridgeBroker(BaseBroker):
             "sl": sl,
             "tp": tp
         }
+        if magic is not None:
+            command["magic"] = magic
 
         response = self._queue_command(command)
 
@@ -641,12 +651,17 @@ class MT5BridgeBroker(BaseBroker):
             logger.warning(f"[MT5-HISTORY] Bridge unreachable ({type(e).__name__}: {e}); using in-process state.")
         return _mt5_state["closed_orders"]
 
-    def consume_recently_closed(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    def consume_recently_closed(self, symbol: Optional[str] = None, magic: Optional[int] = None) -> List[Dict[str, Any]]:
         if not self.in_process:
             try:
+                params = {}
+                if symbol:
+                    params["symbol"] = symbol
+                if magic is not None:
+                    params["magic"] = magic
                 resp = httpx.get(
                     f"{self.base_url}/api/mt5/recently_closed",
-                    params={"symbol": symbol} if symbol else None,
+                    params=params or None,
                     timeout=3.0,
                 )
                 if resp.status_code == 200:
@@ -654,4 +669,4 @@ class MT5BridgeBroker(BaseBroker):
             except Exception as e:
                 logger.warning(f"[MT5-RECENT] Bridge unreachable ({type(e).__name__}: {e}); using in-process state.")
 
-        return _pop_recently_closed(symbol)
+        return _pop_recently_closed(symbol, magic)

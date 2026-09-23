@@ -177,6 +177,25 @@ def test_execution_results_endpoint_roundtrip():
     assert missing.json()["result"] is None
 
 
+def test_confirm_retcode_roundtrips_on_failure():
+    """EA-reported retcode on a FAILED confirm must survive to execution_results
+    (e.g. 10027 = AutoTrading disabled), so it's visible instead of always None."""
+    client = TestClient(app)
+
+    confirm_payload = {
+        "command_id": "cmd_retcode_test",
+        "status": "FAILED",
+        "ticket": 0,
+        "retcode": 10027,
+        "message": "Retcode: 10027",
+    }
+    assert client.post("/api/mt5/confirm", json=confirm_payload).status_code == 200
+
+    resp = client.get("/api/mt5/execution_results", params={"command_id": "cmd_retcode_test"})
+    assert resp.status_code == 200
+    assert resp.json()["result"]["retcode"] == 10027
+
+
 def test_telemetry_accepts_mql5_trailing_null_terminator():
     """MQL5 StringToCharArray appends NUL unless an explicit size is supplied."""
     client = TestClient(app)
@@ -338,3 +357,37 @@ def test_single_specialist_smoke_cycle_reaches_ea_confirmation():
     assert result["status"] == "ORDER_PLACED"
     assert result["order"]["confirmed"] is True
     assert result["order"]["ticket"] == 900001
+
+
+def test_pop_recently_closed_scopes_by_magic_not_just_symbol():
+    """Regression guard: two same-symbol timeframe-instances must not steal
+    each other's closed-trade records out of the shared queue."""
+    bridge_server._mt5_state["recently_closed"] = [
+        {"ticket": 1, "symbol": "XAUUSD", "magic": 888999, "pnl_usd": 12.5},
+        {"ticket": 2, "symbol": "XAUUSD", "magic": 888915, "pnl_usd": -3.0},
+    ]
+
+    only_m5 = bridge_server._pop_recently_closed("XAUUSD", 888999)
+    assert [o["ticket"] for o in only_m5] == [1]
+
+    # The M15 instance's record must still be in the queue -- not stolen.
+    remaining = bridge_server._mt5_state["recently_closed"]
+    assert [o["ticket"] for o in remaining] == [2]
+
+    only_m15 = bridge_server._pop_recently_closed("XAUUSD", 888915)
+    assert [o["ticket"] for o in only_m15] == [2]
+    assert bridge_server._mt5_state["recently_closed"] == []
+
+
+def test_pop_recently_closed_without_magic_still_pops_whole_symbol():
+    """Backward compatibility: a caller that never opts into per-instance
+    magic (e.g. the current production M5 path before it's updated) must
+    keep seeing every closed record for its symbol, exactly like today."""
+    bridge_server._mt5_state["recently_closed"] = [
+        {"ticket": 1, "symbol": "XAUUSD", "magic": 888999},
+        {"ticket": 2, "symbol": "XAUUSD", "magic": 888915},
+        {"ticket": 3, "symbol": "BTCUSD", "magic": 888999},
+    ]
+    taken = bridge_server._pop_recently_closed("XAUUSD")
+    assert sorted(o["ticket"] for o in taken) == [1, 2]
+    assert [o["ticket"] for o in bridge_server._mt5_state["recently_closed"]] == [3]
