@@ -81,7 +81,7 @@ class DashboardFeedProvider:
             # Ensure time is unix timestamp integer
             formatted = []
             for b in raw_bars:
-                t = b.get("time") or b.get("timestamp")
+                t = b.get("time") or b.get("timestamp") or time.time()
                 if isinstance(t, str):
                     try:
                         t = int(pd.to_datetime(t).timestamp())

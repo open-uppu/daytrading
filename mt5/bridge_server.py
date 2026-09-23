@@ -4,6 +4,7 @@ Enables bidirectional communication between Python and MT5 via AgenticMT5Bridge.
 """
 
 from typing import Dict, Any, List, Optional
+import asyncio
 import time
 import uuid
 import httpx
@@ -16,6 +17,7 @@ import logging
 from time import time as monotonic_wall_time
 from config import config
 from mt5.broker_interface import BaseBroker
+from frontend.router import mount_frontend, ws_hub
 
 logger = logging.getLogger("mt5_bridge_server")
 
@@ -73,6 +75,9 @@ _execution_results: Dict[str, Any] = {}
 _cached_bars: Dict[str, Dict[str, Any]] = {}
 MARKET_DATA_MAX_AGE_SEC = 90.0
 MAX_EXECUTION_RESULTS = 1_000
+
+# Mount real-time frontend dashboard router & static assets
+mount_frontend(app, _mt5_state, _cached_bars)
 
 
 class MarketDataStale(RuntimeError):
@@ -197,7 +202,26 @@ async def receive_telemetry(payload: TelemetryPayload):
             if order not in _mt5_state["closed_orders"]:
                 _mt5_state["closed_orders"].append(order)
                 _mt5_state["recently_closed"].append(order)
-                
+
+    # Broadcast telemetry update to connected WebSocket clients
+    try:
+        asyncio.create_task(ws_hub.broadcast({
+            "type": "telemetry",
+            "account": {
+                "balance": _mt5_state["balance"],
+                "equity": _mt5_state["equity"],
+                "bid": _mt5_state["bid"],
+                "ask": _mt5_state["ask"],
+                "symbol": _mt5_state["symbol"],
+                "open_positions": _mt5_state["open_positions"],
+                "closed_orders": _mt5_state["closed_orders"],
+                "last_sync": _mt5_state["last_sync"],
+                "connected": _mt5_state["connected"],
+            }
+        }))
+    except Exception as exc:
+        logger.debug(f"[MT5-TELEMETRY] Broadcast error: {exc}")
+
     return {"status": "ACK", "server_time": _mt5_state["last_sync"]}
 
 
@@ -252,6 +276,18 @@ async def receive_bars(payload: BarsPayload):
         "received_at": now,
         "changed_at": now if moved else prev["changed_at"],
     }
+
+    # Broadcast bar update to connected WebSocket clients
+    try:
+        asyncio.create_task(ws_hub.broadcast({
+            "type": "bars",
+            "symbol": payload.symbol.upper(),
+            "timeframe": payload.timeframe.upper(),
+            "bars": payload.bars,
+        }))
+    except Exception as exc:
+        logger.debug(f"[MT5-BARS] Broadcast error: {exc}")
+
     return {"status": "BARS_STORED", "count": len(payload.bars), "key": key}
 
 
