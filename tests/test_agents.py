@@ -154,6 +154,41 @@ def test_squad_manager_gated_specialist_reachable_by_explicit_name(tmp_path):
     assert len(squad.specialists) == 1
 
 
+def test_squad_manager_assigns_per_timeframe_magic_and_journal_dir(tmp_path):
+    """Every timeframe-instance must get its own MT5 magic number and journal
+    directory so concurrent same-symbol instances never share state or
+    silently steal each other's positions. M5 must keep the exact magic the
+    live account's open positions already use."""
+    from agents.squad_manager import TIMEFRAME_MAGIC
+    broker = PaperTradingBroker(initial_balance=10000.0)
+
+    squad_m5 = SquadManager(broker=broker, initial_balance=10000.0,
+                             agents_to_enable=["gold"], timeframe="M5",
+                             journal_dir=tmp_path / "m5")
+    assert squad_m5.specialists["gold"].magic == 888999
+    assert squad_m5.specialists["gold"].journal_dir == tmp_path / "m5" / "xauusd"
+
+    squad_m15 = SquadManager(broker=broker, initial_balance=10000.0,
+                              agents_to_enable=["gold"], timeframe="M15",
+                              journal_dir=tmp_path / "m15")
+    assert squad_m15.specialists["gold"].magic == TIMEFRAME_MAGIC["M15"]
+    assert squad_m15.specialists["gold"].magic != 888999
+    assert squad_m15.specialists["gold"].journal_dir == tmp_path / "m15" / "xauusd"
+
+
+def test_squad_manager_uses_forced_timeframes_own_magic_not_squads(tmp_path):
+    """xag/gbp/eur/xpt are forced to M15 regardless of the squad's own
+    timeframe (see SPECIALIST_REGISTRY) -- their magic must follow their
+    actual (forced) timeframe, not whatever the squad was started with."""
+    from agents.squad_manager import TIMEFRAME_MAGIC
+    broker = PaperTradingBroker(initial_balance=10000.0)
+    squad = SquadManager(broker=broker, initial_balance=10000.0,
+                          agents_to_enable=["all"], timeframe="M5",
+                          journal_dir=tmp_path)
+    assert squad.specialists["gold"].magic == 888999
+    assert squad.specialists["xag"].magic == TIMEFRAME_MAGIC["M15"]
+
+
 def test_portfolio_open_risk_uses_real_contract_size_for_new_markets(monkeypatch):
     """The old hardcoded 3-entry dict defaulted unknown symbols to contract_size=1.0.
     A EURUSD position (real contract_size 100000) would have had its risk

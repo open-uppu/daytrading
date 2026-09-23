@@ -58,6 +58,35 @@ GATED_SPECIALISTS: Dict[str, Tuple[Type[BaseSpecialistAgent], str, Optional[str]
     "xng": (NaturalGasSpecialistAgent, "xngusd", "M15"),
 }
 
+# Deterministic MT5 magic number per timeframe: 888900 + minutes(timeframe).
+# M5 is the one exception -- it must stay 888999 to match the magic already
+# in use by real open positions on the live account (see
+# mt5/AgenticMT5Bridge.mq5's InpMagicNumber default). This table must be
+# kept in sync with mt5/AgenticMT5Bridge.mq5's g_managedMagics[] array --
+# an entry missing from either side means that timeframe's positions won't
+# be reported back to the Python bridge at all.
+TIMEFRAME_MAGIC: Dict[str, int] = {
+    "M1": 888901,
+    "M5": 888999,
+    "M15": 888915,
+    "M30": 888930,
+    "H1": 888960,
+    "H4": 889140,
+    "D1": 890340,
+}
+
+
+def magic_for_timeframe(timeframe: str) -> int:
+    try:
+        return TIMEFRAME_MAGIC[timeframe.upper()]
+    except KeyError:
+        raise ValueError(
+            f"No magic number mapping for timeframe {timeframe!r}. "
+            f"Add one to TIMEFRAME_MAGIC before running this timeframe live -- "
+            f"never fall back to another timeframe's magic, that would make "
+            f"two instances silently share (and corrupt) each other's positions."
+        )
+
 
 class SquadManager:
     """
@@ -155,12 +184,14 @@ class SquadManager:
             if key not in all_specialists:
                 continue
             agent_cls, journal_subdir, forced_timeframe = all_specialists[key]
+            effective_timeframe = forced_timeframe or self.timeframe
             self.specialists[key] = agent_cls(
                 broker=self.broker,
                 broker_mode=self.broker_mode,
                 initial_balance=self.initial_balance,
-                timeframe=forced_timeframe or self.timeframe,
-                journal_dir=(journal_dir / journal_subdir) if journal_dir else None
+                timeframe=effective_timeframe,
+                journal_dir=(journal_dir / journal_subdir) if journal_dir else None,
+                magic=magic_for_timeframe(effective_timeframe)
             )
 
         if self.broker_mode == "mt5" and isinstance(self.broker, MT5BridgeBroker):
