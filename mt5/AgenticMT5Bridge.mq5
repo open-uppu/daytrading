@@ -48,6 +48,20 @@ datetime       g_lastHistorySync  = 0;
 // contract_size) -- so flipping them on later needs no second EA recompile.
 string g_squadSymbols[] = {"XAUUSD", "BTCUSD", "ETHUSD", "XAGUSD", "GBPUSD", "EURUSD", "XPTUSD", "UKOIL", "XNGUSD"};
 
+// One entry per timeframe-instance this EA suite can manage. Must mirror
+// agents/squad_manager.py's TIMEFRAME_MAGIC table exactly -- an EA build
+// that drifts from the Python table will silently stop reporting positions
+// for whichever timeframe's magic went missing from both lists.
+ulong g_managedMagics[] = {888999, 888901, 888915, 888930, 888960, 889140, 890340};
+
+bool IsManagedMagic(const long magic)
+{
+   for(int i = 0; i < ArraySize(g_managedMagics); i++)
+      if((long)g_managedMagics[i] == magic)
+         return true;
+   return false;
+}
+
 // StringToCharArray(..., WHOLE_ARRAY, CP_UTF8) appends a C-string NUL.
 // HTTP JSON bodies must not include it; keep the conversion in one place so
 // telemetry and execution confirmations use the same wire format.
@@ -194,7 +208,7 @@ void SendTelemetry()
       ulong ticket = PositionGetTicket(i);
       if(ticket > 0 && g_pos.SelectByTicket(ticket))
       {
-         if(g_pos.Magic() == InpMagicNumber)
+         if(IsManagedMagic(g_pos.Magic()))
          {
             if(!first) json += ",";
             first = false;
@@ -208,6 +222,7 @@ void SendTelemetry()
             json += "\"sl\":" + DoubleToString(g_pos.StopLoss(), 2) + ",";
             json += "\"tp\":" + DoubleToString(g_pos.TakeProfit(), 2) + ",";
             json += "\"profit\":" + DoubleToString(g_pos.Profit(), 2) + ",";
+            json += "\"magic\":" + IntegerToString(g_pos.Magic()) + ",";
             // Include per-symbol prices so the bridge can serve quotes for
             // symbols other than the one this EA is charted on.
             json += "\"bid\":" + DoubleToString(SymbolInfoDouble(g_pos.Symbol(), SYMBOL_BID), 2) + ",";
@@ -231,7 +246,7 @@ void SendTelemetry()
       {
          long entryType = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
          long magic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
-         if(entryType == DEAL_ENTRY_OUT && magic == (long)InpMagicNumber) // Deal closed
+         if(entryType == DEAL_ENTRY_OUT && IsManagedMagic(magic)) // Deal closed
          {
             if(!firstDeal) json += ",";
             firstDeal = false;
@@ -270,7 +285,8 @@ void SendTelemetry()
             json += "\"open_price\":" + DoubleToString(openPrice, 2) + ",";
             json += "\"close_price\":" + DoubleToString(dealPrice, 2) + ",";
             json += "\"lots\":" + DoubleToString(dealLots, 2) + ",";
-            json += "\"pnl_usd\":" + DoubleToString(dealProfit, 2);
+            json += "\"pnl_usd\":" + DoubleToString(dealProfit, 2) + ",";
+            json += "\"magic\":" + IntegerToString(magic);
             json += "}";
          }
       }
@@ -369,6 +385,7 @@ void ExecuteCommand(string json)
       double volume = ExtractDouble(json, "\"volume\":", 0.01);
       double sl = ExtractDouble(json, "\"sl\":", 0.0);
       double tp = ExtractDouble(json, "\"tp\":", 0.0);
+      ulong cmdMagic = (ulong)ExtractDouble(json, "\"magic\":", (double)InpMagicNumber);
       string cmdId = ExtractString(json, "\"id\":\"", "\"");
 
       // Make sure the symbol exists and is subscribed in Market Watch.
@@ -449,6 +466,7 @@ void ExecuteCommand(string json)
          return;
       }
 
+      g_trade.SetExpertMagicNumber(cmdMagic);
       bool success = false;
       if(isBuy)
       {
@@ -478,8 +496,9 @@ void ExecuteCommand(string json)
    {
       string cmdId = ExtractString(json, "\"id\":\"", "\"");
       ulong ticket = (ulong)ExtractDouble(json, "\"ticket\":", 0.0);
+      ulong cmdMagic = (ulong)ExtractDouble(json, "\"magic\":", (double)InpMagicNumber);
       bool success = false;
-      if(ticket > 0 && g_pos.SelectByTicket(ticket) && g_pos.Magic() == InpMagicNumber)
+      if(ticket > 0 && g_pos.SelectByTicket(ticket) && g_pos.Magic() == cmdMagic)
       {
          success = g_trade.PositionClose(ticket);
       }
@@ -499,7 +518,8 @@ void ExecuteCommand(string json)
       ulong ticket = (ulong)ExtractDouble(json, "\"ticket\":", 0.0);
       double sl = ExtractDouble(json, "\"sl\":", 0.0);
       double tp = ExtractDouble(json, "\"tp\":", 0.0);
-      if(ticket <= 0 || !g_pos.SelectByTicket(ticket) || g_pos.Magic() != InpMagicNumber)
+      ulong cmdMagic = (ulong)ExtractDouble(json, "\"magic\":", (double)InpMagicNumber);
+      if(ticket <= 0 || !g_pos.SelectByTicket(ticket) || g_pos.Magic() != cmdMagic)
       {
          ConfirmExecution(cmdId, "REJECTED", 0, "Position not found or not owned by this EA");
          return;
