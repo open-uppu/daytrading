@@ -43,6 +43,11 @@ CPositionInfo  g_pos;
 CAccountInfo   g_account;
 datetime       g_lastHistorySync  = 0;
 
+// Every symbol the Python squad might trade. UKOIL/XNGUSD are streamed even
+// though their Python agents are gated behind explicit opt-in (unconfirmed
+// contract_size) -- so flipping them on later needs no second EA recompile.
+string g_squadSymbols[] = {"XAUUSD", "BTCUSD", "ETHUSD", "XAGUSD", "GBPUSD", "EURUSD", "XPTUSD", "UKOIL", "XNGUSD"};
+
 // StringToCharArray(..., WHOLE_ARRAY, CP_UTF8) appends a C-string NUL.
 // HTTP JSON bodies must not include it; keep the conversion in one place so
 // telemetry and execution confirmations use the same wire format.
@@ -85,14 +90,12 @@ void OnDeinit(const int reason)
 void OnTimer()
 {
    SendTelemetry();
-   SendMarketBars("XAUUSD", InpTimeframe, 120);
-   SendMarketBars("BTCUSD", InpTimeframe, 120);
-   SendMarketBars("ETHUSD", InpTimeframe, 120);
+   for(int i = 0; i < ArraySize(g_squadSymbols); i++)
+      SendMarketBars(g_squadSymbols[i], InpTimeframe, 120);
    if(InpTimeframe != PERIOD_M15)
    {
-      SendMarketBars("XAUUSD", PERIOD_M15, 60);
-      SendMarketBars("BTCUSD", PERIOD_M15, 60);
-      SendMarketBars("ETHUSD", PERIOD_M15, 60);
+      for(int i = 0; i < ArraySize(g_squadSymbols); i++)
+         SendMarketBars(g_squadSymbols[i], PERIOD_M15, 60);
    }
    PollCommands();
    CheckFileCommands();
@@ -234,10 +237,39 @@ void SendTelemetry()
             firstDeal = false;
             double dealProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
             double dealPrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+            double dealLots = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+            long posId = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+
+            // The OUT deal's own DEAL_TYPE is the closing side (opposite of the
+            // original position), so look up the paired entry deal for the
+            // true direction and open price.
+            string dealType = "BUY";
+            double openPrice = dealPrice;
+            if(HistorySelectByPosition(posId))
+            {
+               int posDeals = HistoryDealsTotal();
+               for(int pd = 0; pd < posDeals; pd++)
+               {
+                  ulong pTicket = HistoryDealGetTicket(pd);
+                  if(pTicket > 0 && HistoryDealGetInteger(pTicket, DEAL_ENTRY) == DEAL_ENTRY_IN)
+                  {
+                     openPrice = HistoryDealGetDouble(pTicket, DEAL_PRICE);
+                     dealType = (HistoryDealGetInteger(pTicket, DEAL_TYPE) == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+                     break;
+                  }
+               }
+               // HistorySelectByPosition() replaced the outer 24h deal-history
+               // selection; restore it before the enclosing loop continues.
+               HistorySelect(from, TimeCurrent());
+            }
+
             json += "{";
             json += "\"ticket\":" + IntegerToString(dealTicket) + ",";
             json += "\"symbol\":\"" + HistoryDealGetString(dealTicket, DEAL_SYMBOL) + "\",";
+            json += "\"type\":\"" + dealType + "\",";
+            json += "\"open_price\":" + DoubleToString(openPrice, 2) + ",";
             json += "\"close_price\":" + DoubleToString(dealPrice, 2) + ",";
+            json += "\"lots\":" + DoubleToString(dealLots, 2) + ",";
             json += "\"pnl_usd\":" + DoubleToString(dealProfit, 2);
             json += "}";
          }
@@ -439,7 +471,7 @@ void ExecuteCommand(string json)
          uint retcode = g_trade.ResultRetcode();
          Print("[AgenticMT5] Order execution failed. Retcode: ", retcode,
                " (", g_trade.ResultRetcodeDescription(), ")");
-         ConfirmExecution(cmdId, "FAILED", 0, "Retcode: " + IntegerToString(retcode));
+         ConfirmExecution(cmdId, "FAILED", 0, "Retcode: " + IntegerToString(retcode), retcode);
       }
    }
    else if(StringFind(json, "ORDER_CLOSE") >= 0)
@@ -459,7 +491,7 @@ void ExecuteCommand(string json)
       if(success)
          ConfirmExecution(cmdId, "SUCCESS", ticket, "Position closed in MT5");
       else
-         ConfirmExecution(cmdId, "FAILED", ticket, "Close retcode: " + IntegerToString(g_trade.ResultRetcode()));
+         ConfirmExecution(cmdId, "FAILED", ticket, "Close retcode: " + IntegerToString(g_trade.ResultRetcode()), g_trade.ResultRetcode());
    }
    else if(StringFind(json, "ORDER_MODIFY") >= 0)
    {
@@ -475,7 +507,7 @@ void ExecuteCommand(string json)
       if(g_trade.PositionModify(ticket, sl, tp))
          ConfirmExecution(cmdId, "SUCCESS", ticket, "Position modified in MT5");
       else
-         ConfirmExecution(cmdId, "FAILED", ticket, "Modify retcode: " + IntegerToString(g_trade.ResultRetcode()));
+         ConfirmExecution(cmdId, "FAILED", ticket, "Modify retcode: " + IntegerToString(g_trade.ResultRetcode()), g_trade.ResultRetcode());
    }
 }
 
@@ -508,12 +540,13 @@ string ExtractString(string text, string startKey, string endKey)
 //+------------------------------------------------------------------+
 //| Confirm execution back to Python Bridge                          |
 //+------------------------------------------------------------------+
-void ConfirmExecution(string cmdId, string status, ulong ticket, string msg)
+void ConfirmExecution(string cmdId, string status, ulong ticket, string msg, uint retcode = 0)
 {
    string json = "{";
    json += "\"command_id\":\"" + cmdId + "\",";
    json += "\"status\":\"" + status + "\",";
    json += "\"ticket\":" + IntegerToString(ticket) + ",";
+   json += "\"retcode\":" + IntegerToString(retcode) + ",";
    json += "\"message\":\"" + msg + "\"";
    json += "}";
 

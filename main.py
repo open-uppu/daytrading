@@ -85,6 +85,7 @@ def cmd_loop(args):
     agents_map = {
         "all": ["all"],  # SquadManager expands this to every SPECIALIST_REGISTRY key (gold/btc/eth + the 4 confirmed new markets, not ukoil/xng)
         "duo": ["gold", "btc"],
+        "legacy3": ["gold", "btc", "eth"],  # fallback while the EA hasn't been recompiled to stream the new symbols' bars yet
         "gold": ["gold"], "btc": ["btc"], "eth": ["eth"],
         "xag": ["xag"], "gbp": ["gbp"], "eur": ["eur"], "xpt": ["xpt"],
         "ukoil": ["ukoil"], "xng": ["xng"],
@@ -257,7 +258,7 @@ def main():
         loop_parser = subparsers.add_parser(cmd_alias, help="Run autonomous trading loop (squad or specialist)")
         loop_parser.add_argument(
             "--agent", default="all",
-            choices=["all", "duo", "gold", "btc", "eth", "xag", "gbp", "eur", "xpt", "ukoil", "xng"],
+            choices=["all", "duo", "legacy3", "gold", "btc", "eth", "xag", "gbp", "eur", "xpt", "ukoil", "xng"],
             help="Specialist agent to run (ukoil/xng need explicit selection -- excluded from 'all', see agents/ukoil_agent.py)"
         )
         loop_parser.add_argument("--mode", default="mt5", choices=["mt5", "paper", "mt4"], help="Broker execution mode")
