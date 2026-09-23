@@ -62,7 +62,7 @@ def run_all_strategies(
     ]
 
     results = []
-    console.print(f"\n[bold gold1]=== Running Gold (XAUUSD) 5-Strategy Backtest ({len(df)} M15 Bars) ===[/bold gold1]\n")
+    console.print(f"\n[bold gold1]=== Running Gold (XAUUSD) 5-Strategy Backtest ({len(df)} {timeframe} Bars) ===[/bold gold1]\n")
 
     for name, fn, color in strategies:
         console.print(f"[cyan]Evaluating: [bold]{name}[/bold]...[/cyan]")
@@ -146,7 +146,7 @@ def run_all_strategies(
 
         ax_eq.axhline(initial_balance, color='#78909C', linestyle='--', linewidth=0.8, alpha=0.6)
         ax_eq.set_title(
-            f"Gold (XAUUSD) Strategy Comparison | Initial: ${initial_balance:,.0f} | 60-Day M15 Data",
+            f"Gold (XAUUSD) Strategy Comparison | Initial: ${initial_balance:,.0f} | {timeframe} Data",
             color='#ECEFF1', fontsize=12, pad=10, weight='bold'
         )
         ax_eq.set_ylabel("Account Equity ($)", color='#90A4AE', fontsize=10)
@@ -161,7 +161,7 @@ def run_all_strategies(
         ax_dd.fill_between(range(len(dd)), 0, dd, color='#FF5252', alpha=0.3)
         ax_dd.plot(dd, color='#FF5252', linewidth=1.0, label=f"Max DD: {winner['max_drawdown_pct']:.1f}%")
         ax_dd.set_ylabel("Drawdown %", color='#90A4AE', fontsize=9)
-        ax_dd.set_xlabel("Time (M15 Bars)", color='#90A4AE', fontsize=9)
+        ax_dd.set_xlabel(f"Time ({timeframe} Bars)", color='#90A4AE', fontsize=9)
         ax_dd.tick_params(colors='#90A4AE', labelsize=8)
         ax_dd.grid(True, color='#263238', linestyle=':', alpha=0.5)
         ax_dd.legend(loc='upper right', facecolor='#1A232A', edgecolor='#37474F', labelcolor='#CFD8DC', fontsize=8)
