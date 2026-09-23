@@ -90,10 +90,59 @@ def cmd_analyze(args):
     print("")
 
 
+def _launch_background_web(host: str, port: int):
+    """Launches the FastAPI bridge server in a background daemon thread if not running."""
+    import socket
+    import threading
+    import uvicorn
+
+    is_running = False
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            if s.connect_ex(("127.0.0.1", port)) == 0:
+                is_running = True
+    except Exception:
+        pass
+
+    if not is_running:
+        def _run_server():
+            cfg = uvicorn.Config(
+                "mt5.bridge_server:app",
+                host=host,
+                port=port,
+                log_level="warning",
+                access_log=False
+            )
+            srv = uvicorn.Server(cfg)
+            srv.run()
+
+        th = threading.Thread(target=_run_server, daemon=True, name="BridgeWebDashboard")
+        th.start()
+        time.sleep(0.6)  # Give uvicorn a moment to bind
+
+    dashboard_url_1 = f"http://127.0.0.1:{port}"
+    dashboard_url_2 = f"http://localhost:{port}"
+    status_text = "Already active" if is_running else "Started in background daemon"
+    console.print(Panel(
+        f"[bold green]PILOTFISH QUANT WEB DASHBOARD ACTIVE[/bold green] ({status_text})\n\n"
+        f" • Open in Browser: [bold cyan]{dashboard_url_1}[/bold cyan] or [bold cyan]{dashboard_url_2}[/bold cyan]\n"
+        f" • Live Chart:      TradingView Lightweight Candles (M1/M5/M15)\n"
+        f" • Telemetry:       Real-time Flash KPIs, Dynamic Target Tracking, Squad Monitor",
+        title="[bold yellow]⚡ Web Dashboard[/bold yellow]",
+        border_style="cyan",
+        expand=False
+    ))
+
+
 def cmd_loop(args):
     """Runs the autonomous trading loop with the Multi-Asset Specialist Squad or single agent."""
+    if getattr(args, "web", False):
+        _launch_background_web(config.mt5_host, config.mt5_port)
+
     agents_map = {
         "all": ["all"],  # SquadManager expands this to every SPECIALIST_REGISTRY key (gold/btc/eth + the 4 confirmed new markets, not ukoil/xng)
+        "all9": ["all", "ukoil", "xng"],  # every symbol the EA streams, including the 2 with unconfirmed contract_size
         "duo": ["gold", "btc"],
         "legacy3": ["gold", "btc", "eth"],  # fallback while the EA hasn't been recompiled to stream the new symbols' bars yet
         "gold": ["gold"], "btc": ["btc"], "eth": ["eth"],
@@ -249,8 +298,19 @@ def cmd_backtest(args):
 def cmd_bridge(args):
     """Runs the MT5 FastAPI bridge server."""
     import uvicorn
+    dashboard_url_1 = f"http://127.0.0.1:{config.mt5_port}"
+    dashboard_url_2 = f"http://localhost:{config.mt5_port}"
+    console.print(Panel(
+        f"[bold green]PILOTFISH QUANT WEB DASHBOARD READY[/bold green]\n\n"
+        f" • Local Dashboard: [bold cyan]{dashboard_url_1}[/bold cyan]\n"
+        f" • Localhost URL:   [bold cyan]{dashboard_url_2}[/bold cyan]\n"
+        f" • MT5 Server API:  [bold yellow]http://{config.mt5_host}:{config.mt5_port}[/bold yellow]\n"
+        f" • Connected EA:    [bold white]{config.mt5_login} ({config.mt5_server})[/bold white]",
+        title="[bold yellow]⚡ Live Trading Terminal & Bridge Server[/bold yellow]",
+        border_style="green",
+        expand=False
+    ))
     console.print(f"[bold green]Starting MT5 Bridge Server on {config.mt5_host}:{config.mt5_port}...[/bold green]")
-    console.print(f"Connected Account: [bold cyan]{config.mt5_login}[/bold cyan] | Server: [bold cyan]{config.mt5_server}[/bold cyan]")
     uvicorn.run("mt5.bridge_server:app", host=config.mt5_host, port=config.mt5_port, reload=False, access_log=False)
 
 
@@ -272,8 +332,8 @@ def main():
         loop_parser = subparsers.add_parser(cmd_alias, help="Run autonomous trading loop (squad or specialist)")
         loop_parser.add_argument(
             "--agent", default="all",
-            choices=["all", "duo", "legacy3", "gold", "btc", "eth", "xag", "gbp", "eur", "xpt", "ukoil", "xng"],
-            help="Specialist agent to run (ukoil/xng need explicit selection -- excluded from 'all', see agents/ukoil_agent.py)"
+            choices=["all", "all9", "duo", "legacy3", "gold", "btc", "eth", "xag", "gbp", "eur", "xpt", "ukoil", "xng"],
+            help="Specialist agent to run ('all9' includes ukoil/xng, which have unconfirmed contract_size -- see agents/ukoil_agent.py)"
         )
         loop_parser.add_argument("--mode", default="mt5", choices=["mt5", "paper", "mt4"], help="Broker execution mode")
         loop_parser.add_argument("--balance", type=float, default=10000.0, help="Initial account balance")
@@ -287,6 +347,10 @@ def main():
         loop_parser.add_argument(
             "--wait-for-live-data", action="store_true",
             help="In MT5 mode, wait safely for fresh telemetry/bars instead of exiting when EA is not ready"
+        )
+        loop_parser.add_argument(
+            "--web", action="store_true", default=False,
+            help="Launch live Web Dashboard and Bridge server in background (http://127.0.0.1:8000)"
         )
     
     # Analyze command

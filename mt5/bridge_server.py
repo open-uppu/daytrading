@@ -17,7 +17,7 @@ import logging
 from time import time as monotonic_wall_time
 from config import config
 from mt5.broker_interface import BaseBroker
-from frontend.router import mount_frontend, ws_hub
+from frontend.router import mount_frontend, ws_hub, get_feed_provider
 
 logger = logging.getLogger("mt5_bridge_server")
 
@@ -205,6 +205,12 @@ async def receive_telemetry(payload: TelemetryPayload):
 
     # Broadcast telemetry update to connected WebSocket clients
     try:
+        portfolio_metrics = {}
+        try:
+            portfolio_metrics = get_feed_provider().get_portfolio_metrics()
+        except Exception:
+            pass
+
         asyncio.create_task(ws_hub.broadcast({
             "type": "telemetry",
             "account": {
@@ -217,7 +223,10 @@ async def receive_telemetry(payload: TelemetryPayload):
                 "closed_orders": _mt5_state["closed_orders"],
                 "last_sync": _mt5_state["last_sync"],
                 "connected": _mt5_state["connected"],
-            }
+            },
+            "portfolio": portfolio_metrics,
+            "open_positions": _mt5_state["open_positions"],
+            "closed_orders": _mt5_state["closed_orders"],
         }))
     except Exception as exc:
         logger.debug(f"[MT5-TELEMETRY] Broadcast error: {exc}")
@@ -279,11 +288,16 @@ async def receive_bars(payload: BarsPayload):
 
     # Broadcast bar update to connected WebSocket clients
     try:
+        try:
+            bars_to_send = get_feed_provider().get_bars_list(payload.symbol, payload.timeframe) or payload.bars
+        except Exception:
+            bars_to_send = payload.bars
+
         asyncio.create_task(ws_hub.broadcast({
             "type": "bars",
             "symbol": payload.symbol.upper(),
             "timeframe": payload.timeframe.upper(),
-            "bars": payload.bars,
+            "bars": bars_to_send,
         }))
     except Exception as exc:
         logger.debug(f"[MT5-BARS] Broadcast error: {exc}")

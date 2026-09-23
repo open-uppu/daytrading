@@ -146,8 +146,8 @@
     if (portfolio) {
       newTodayPnl = Number(portfolio.realized_pnl_usd != null ? portfolio.realized_pnl_usd : 0);
       dailyPct = Number(portfolio.daily_return_pct != null ? portfolio.daily_return_pct : 0);
-    } else if (account.balance != null && portfolio?.starting_balance) {
-      newTodayPnl = newBalance - Number(portfolio.starting_balance);
+    } else if (account.balance != null && state.portfolio?.starting_balance) {
+      newTodayPnl = newBalance - Number(state.portfolio.starting_balance);
     }
 
     // Trigger flash animations on change
@@ -918,6 +918,7 @@
     }
     if (state.ws) {
       try {
+        state.ws.onclose = null;
         state.ws.close();
       } catch {}
       state.ws = null;
