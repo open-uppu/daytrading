@@ -634,21 +634,23 @@ class MT5BridgeBroker(BaseBroker):
         return {**response, "confirmed": True, **confirmation}
 
     def get_open_positions(self) -> List[Dict[str, Any]]:
-        try:
-            resp = httpx.get(f"{self.base_url}/api/mt5/account", timeout=3.0)
-            if resp.status_code == 200:
-                return resp.json().get("open_positions", [])
-        except Exception as e:
-            logger.warning(f"[MT5-POSITIONS] Bridge unreachable ({type(e).__name__}: {e}); using in-process state.")
+        if not self.in_process:
+            try:
+                resp = httpx.get(f"{self.base_url}/api/mt5/account", timeout=3.0)
+                if resp.status_code == 200:
+                    return resp.json().get("open_positions", [])
+            except Exception as e:
+                logger.warning(f"[MT5-POSITIONS] Bridge unreachable ({type(e).__name__}: {e}); using in-process state.")
         return _mt5_state["open_positions"]
 
     def get_closed_orders(self) -> List[Dict[str, Any]]:
-        try:
-            resp = httpx.get(f"{self.base_url}/api/mt5/account", timeout=3.0)
-            if resp.status_code == 200:
-                return resp.json().get("closed_orders", [])
-        except Exception as e:
-            logger.warning(f"[MT5-HISTORY] Bridge unreachable ({type(e).__name__}: {e}); using in-process state.")
+        if not self.in_process:
+            try:
+                resp = httpx.get(f"{self.base_url}/api/mt5/account", timeout=3.0)
+                if resp.status_code == 200:
+                    return resp.json().get("closed_orders", [])
+            except Exception as e:
+                logger.warning(f"[MT5-HISTORY] Bridge unreachable ({type(e).__name__}: {e}); using in-process state.")
         return _mt5_state["closed_orders"]
 
     def consume_recently_closed(self, symbol: Optional[str] = None, magic: Optional[int] = None) -> List[Dict[str, Any]]:

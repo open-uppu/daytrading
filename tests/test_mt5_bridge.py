@@ -391,3 +391,32 @@ def test_pop_recently_closed_without_magic_still_pops_whole_symbol():
     taken = bridge_server._pop_recently_closed("XAUUSD")
     assert sorted(o["ticket"] for o in taken) == [1, 2]
     assert [o["ticket"] for o in bridge_server._mt5_state["recently_closed"]] == [3]
+
+
+def test_get_open_positions_in_process_reads_state_directly_never_network():
+    """
+    Regression guard: unlike every other method on this class,
+    get_open_positions() used to skip the `if not self.in_process` guard and
+    always attempt `httpx.get(...)` first. On a machine with a real MT5
+    bridge server also running, an `in_process=True` test broker silently
+    leaked real production account data into what should be isolated test
+    state.
+
+    Mutate `_mt5_state["open_positions"]` directly (never via an HTTP
+    telemetry POST) so this proves the in-process path reads the dict
+    in-process, without ever attempting the network branch.
+    """
+    sentinel = [{"ticket": 999999999, "symbol": "__SENTINEL__", "magic": 1}]
+    bridge_server._mt5_state["open_positions"] = sentinel
+
+    broker = MT5BridgeBroker(in_process=True)
+    assert broker.get_open_positions() == sentinel
+
+
+def test_get_closed_orders_in_process_reads_state_directly_never_network():
+    """Same guard as above, for get_closed_orders() / closed_orders."""
+    sentinel = [{"ticket": 888888888, "pnl_usd": 42.0}]
+    bridge_server._mt5_state["closed_orders"] = sentinel
+
+    broker = MT5BridgeBroker(in_process=True)
+    assert broker.get_closed_orders() == sentinel
