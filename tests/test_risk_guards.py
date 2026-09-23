@@ -40,15 +40,3 @@ def test_corrupt_baseline_file_is_replaced(tmp_path):
     f.write_text("{not json")
     assert day_baseline(f, 500.0, today="2026-09-21") == 500.0
     assert day_baseline(f, 400.0, today="2026-09-21") == 500.0
-
-
-class ReplayBroker:
-    """Stub broker that keeps re-reporting the same closed trade every call,
-    mimicking the EA's rolling-window telemetry re-sending old deals after a
-    bridge/squad restart."""
-
-    def __init__(self, closed_trades):
-        self._closed_trades = closed_trades
-
-    def consume_recently_closed(self, symbol=None, magic=None):
-        return list(self._closed_trades)
