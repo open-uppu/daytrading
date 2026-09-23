@@ -72,7 +72,7 @@ def test_paper_broker_filters_recently_closed_by_magic():
 
 def test_mt4_bridge_api():
     client = TestClient(app)
-    
+
     # 1. Telemetry Post
     telemetry_data = {
         "account_number": 888123,
@@ -87,7 +87,7 @@ def test_mt4_bridge_api():
     resp = client.post("/api/mt4/telemetry", json=telemetry_data)
     assert resp.status_code == 200
     assert resp.json()["status"] == "ACK"
-    
+
     # 2. Broker adapter queues command (in_process: the TestClient app runs in
     #    this same process, so the module-level queue is reachable)
     broker = MT4BridgeBroker(in_process=True)
@@ -101,7 +101,7 @@ def test_mt4_bridge_api():
         await_confirm=False
     )
     assert queue_res["status"] == "QUEUED"
-    
+
     # 3. MT4 polls commands
     poll_resp = client.get("/api/mt4/commands")
     assert poll_resp.status_code == 200
@@ -109,3 +109,13 @@ def test_mt4_bridge_api():
     assert len(commands) == 1
     assert commands[0]["type"] == "BUY"
     assert commands[0]["volume"] == 0.3
+
+
+def test_mt4_bridge_open_order_accepts_magic_kwarg():
+    broker = MT4BridgeBroker(in_process=True)
+    # Must not raise TypeError -- agents/base_agent.py always passes magic=.
+    response = broker.open_order(
+        symbol="XAUUSD", order_type="BUY", lots=0.01,
+        sl=1990.0, tp=2015.0, magic=888915, await_confirm=False
+    )
+    assert response["status"] == "QUEUED"

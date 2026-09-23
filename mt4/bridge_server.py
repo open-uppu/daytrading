@@ -254,7 +254,8 @@ class MT4BridgeBroker(BaseBroker):
         tp: float,
         comment: str = "",
         await_confirm: bool = True,
-        confirm_timeout: float = 10.0
+        confirm_timeout: float = 10.0,
+        magic: Optional[int] = None
     ) -> Dict[str, Any]:
         """Queues an open command for the MT4 EA and waits for confirmation."""
         cmd_id = f"cmd_{self.cmd_counter}_{int(pd.Timestamp.now().timestamp())}"
@@ -270,6 +271,8 @@ class MT4BridgeBroker(BaseBroker):
             "tp": tp,
             "comment": comment
         }
+        if magic is not None:
+            command["magic"] = magic
         response = self._queue_command(command)
         logger.info(f"[MT4-QUEUE] Delivered to bridge: {order_type} {lots} lots on {symbol} cmd={cmd_id}")
 
@@ -296,7 +299,8 @@ class MT4BridgeBroker(BaseBroker):
         self,
         ticket: int,
         await_confirm: bool = True,
-        confirm_timeout: float = 10.0
+        confirm_timeout: float = 10.0,
+        magic: Optional[int] = None
     ) -> Dict[str, Any]:
         """Queues a close command for MT4 EA."""
         cmd_id = f"cmd_close_{ticket}_{self.cmd_counter}"
@@ -307,6 +311,8 @@ class MT4BridgeBroker(BaseBroker):
             "action": "ORDER_CLOSE",
             "ticket": ticket
         }
+        if magic is not None:
+            command["magic"] = magic
         response = self._queue_command(command)
 
         if not await_confirm:
@@ -324,7 +330,8 @@ class MT4BridgeBroker(BaseBroker):
         sl: Optional[float] = None,
         tp: Optional[float] = None,
         await_confirm: bool = True,
-        confirm_timeout: float = 10.0
+        confirm_timeout: float = 10.0,
+        magic: Optional[int] = None
     ) -> Dict[str, Any]:
         """Queues a modify command for MT4 EA."""
         cmd_id = f"cmd_mod_{ticket}_{self.cmd_counter}"
@@ -337,6 +344,8 @@ class MT4BridgeBroker(BaseBroker):
             "sl": sl,
             "tp": tp
         }
+        if magic is not None:
+            command["magic"] = magic
         response = self._queue_command(command)
 
         if not await_confirm:
