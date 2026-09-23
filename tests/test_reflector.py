@@ -95,3 +95,35 @@ def test_pre_trade_filter_blocks_violations():
         nearest_sr=2670.0  # 20.0 points away
     )
     assert passed is True
+
+
+def test_pre_trade_filter_exempts_reversion_signals_from_ema_trend_rule():
+    """A mean-reversion SELL (e.g. ETH M5's Bollinger upper-band reject) is
+    SUPPOSED to fire above EMA 200 during an overbought spike -- RULE-001's
+    trend filter must not veto it, even on a 'trend'-labeled agent (ETH-M5),
+    while a non-reversion signal in the same spot is still blocked."""
+    filter_engine = PreTradeFilter(strategy_type="trend")
+
+    # SELL above EMA 200, tagged REVERSION -- must pass RULE-001.
+    # sl_price kept >= 1.2*ATR away from entry so RULE-004 doesn't also trip.
+    passed, reason = filter_engine.evaluate_proposal(
+        action="SELL",
+        entry_price=2757.31,
+        sl_price=2764.0,
+        ema_200=2736.57,  # entry is ABOVE EMA 200
+        atr=4.0,
+        signal_type="REVERSION"
+    )
+    assert passed is True
+
+    # Same exact setup without the REVERSION tag -- RULE-001 still applies.
+    passed, reason = filter_engine.evaluate_proposal(
+        action="SELL",
+        entry_price=2757.31,
+        sl_price=2764.0,
+        ema_200=2736.57,
+        atr=4.0,
+        signal_type="PULLBACK"
+    )
+    assert passed is False
+    assert "RULE-001" in reason

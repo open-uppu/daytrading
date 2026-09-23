@@ -232,14 +232,20 @@ class PreTradeFilter:
         sl_price: float,
         ema_200: float,
         atr: float,
-        nearest_sr: Optional[float] = None
+        nearest_sr: Optional[float] = None,
+        signal_type: Optional[str] = None
     ) -> Tuple[bool, str]:
         """
         Validates setup against learned rules before allowing trade dispatch.
         Returns: (passed: bool, reason: str)
         """
-        # 1. Rule Check: Respect HTF Trend (EMA 200) for trend strategies
-        if self.enforce_ema_trend and self.strategy_type == "trend":
+        # 1. Rule Check: Respect HTF Trend (EMA 200) for trend strategies.
+        # A mean-reversion signal (e.g. ETH M5's Bollinger-band reject) is
+        # supposed to fire on the "wrong" side of EMA 200 during an extreme
+        # -- that's its whole premise -- so it's exempt from this filter even
+        # on an agent whose overall strategy_type label is "trend" (ETH-M5's
+        # scalper is a hybrid of pullback and reversion signals).
+        if self.enforce_ema_trend and self.strategy_type == "trend" and signal_type != "REVERSION":
             if action == "BUY" and entry_price < ema_200:
                 return False, f"RULE_VIOLATION [RULE-001]: Cannot BUY below EMA 200 ({entry_price:.2f} < {ema_200:.2f})"
             if action == "SELL" and entry_price > ema_200:
