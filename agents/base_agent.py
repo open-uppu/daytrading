@@ -142,6 +142,7 @@ class BaseSpecialistAgent(ABC):
         # 5. Agent Runtime State
         self.last_chart_path: Optional[Path] = None
         self.last_signal: Dict[str, Any] = {"action": "HOLD"}
+        self.last_ml_confidence: Optional[float] = None
         self.iteration_count: int = 0
         self.known_closed_tickets: set = set(_dts["known_closed_tickets"])
         self.trailed_tickets: set = set()
@@ -454,6 +455,7 @@ class BaseSpecialistAgent(ABC):
         Executes one complete autonomous analysis and execution cycle for this asset.
         """
         self.iteration_count += 1
+        self.last_ml_confidence = None
         prefix = f"[{self.symbol} Specialist #{self.iteration_count}]"
 
         # 1. Reconcile closed trades
@@ -672,6 +674,7 @@ class BaseSpecialistAgent(ABC):
                     reason = f"{self.symbol} M5 Rapid Cadence Entry (Macro Bearish)"
 
                 signal = {"action": action, "sl": sl_candidate, "tp": tp_candidate, "reason": reason, "signal_type": "CADENCE_PACER"}
+                self.last_signal = signal
                 logger.info(
                     f"[⏱️ CADENCE-PACER] {self.symbol} ครบกำหนด Cadence ({self.min_entry_interval_sec}s) "
                     f"-> ออกออเดอร์ตามเทรนด์ M5 ทันที: {action} (SL: ${sl_candidate:,.2f}, TP: ${tp_candidate:,.2f})"
@@ -757,6 +760,7 @@ class BaseSpecialistAgent(ABC):
                 asset_symbol=self.symbol,
                 custom_threshold=ml_threshold
             )
+            self.last_ml_confidence = float(ml_conf)
             logger.info(
                 f"[2. คิดวิเคราะห์จริง / ML-GATE] {self.symbol} ML Win Probability: {ml_conf:.1%} "
                 f"(Threshold: {ml_threshold:.1%}) -> {'✅ ผ่านเงื่อนไข (PASS)' if ml_passed else '❌ ต่ำกว่าเกณฑ์ความมั่นใจ (VETOED)'}"
@@ -844,6 +848,7 @@ class BaseSpecialistAgent(ABC):
                 "asset": self.asset_name,
                 "iteration": self.iteration_count,
                 "status": "ORDER_UNCONFIRMED",
+                "action": action,
                 "order": order_res,
                 "strategy": self.strategy_name,
                 "session_summary": summary
@@ -861,6 +866,7 @@ class BaseSpecialistAgent(ABC):
             "asset": self.asset_name,
             "iteration": self.iteration_count,
             "status": "ORDER_PLACED",
+            "action": action,
             "order": order_res,
             "strategy": self.strategy_name,
             "session_summary": summary

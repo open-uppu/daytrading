@@ -5,6 +5,7 @@ Orchestrates Gold, Bitcoin, and Ethereum specialists with a unified Portfolio 3%
 
 from typing import Dict, Any, List, Optional, Tuple, Type
 from pathlib import Path
+import json
 import time
 import logging
 from datetime import datetime, timezone, date
@@ -106,6 +107,7 @@ class SquadManager:
         self.broker_mode = broker_mode or config.broker_mode
         self.initial_balance = initial_balance or config.initial_balance
         self.timeframe = timeframe or config.timeframe_main
+        self._runtime_status_dir = Path(journal_dir) / "specialist_runtime" if journal_dir else None
         
         # 1. Initialize Shared Broker
         if broker is not None:
@@ -342,12 +344,49 @@ class SquadManager:
                 logger.error(f"[Squad Manager] Error during {agent.symbol} agent step: {e}", exc_info=True)
                 agent_results[key] = {"status": "ERROR", "error": str(e)}
 
+        self._publish_specialist_runtime(agent_results)
+
         return {
             "iteration": self.iteration_count,
             "status": "ACTIVE",
             "portfolio": self.get_portfolio_daily_pnl(),
             "specialist_results": agent_results
         }
+
+    def _publish_specialist_runtime(self, agent_results: Dict[str, Dict[str, Any]]) -> None:
+        """Persist read-only specialist heartbeats for the dashboard; never affects execution."""
+        if self._runtime_status_dir is None:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        specialists: Dict[str, Dict[str, Any]] = {}
+        for key, agent in self.specialists.items():
+            result = agent_results.get(key, {})
+            signal = result.get("signal") if isinstance(result.get("signal"), dict) else agent.last_signal
+            item: Dict[str, Any] = {
+                "name": agent.asset_name,
+                "symbol": agent.symbol,
+                "strategy": agent.strategy_name,
+                "timeframe": agent.timeframe,
+                "status": result.get("status", "UNREPORTED"),
+                "action": result.get("action") or (signal.get("action") if isinstance(signal, dict) else None),
+                "last_seen": now,
+            }
+            confidence = getattr(agent, "last_ml_confidence", None)
+            if isinstance(confidence, (int, float)):
+                item["confidence"] = float(confidence)
+            specialists[key] = item
+
+        payload = {"updated_at": now, "specialists": specialists}
+        try:
+            self._runtime_status_dir.mkdir(parents=True, exist_ok=True)
+            path = self._runtime_status_dir / f"{self.timeframe.lower()}.json"
+            temporary_path = path.with_suffix(".tmp")
+            temporary_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            temporary_path.replace(path)
+        except OSError as exc:
+            # Dashboard telemetry is best-effort and must never interrupt the
+            # portfolio loop or influence an already-made trading decision.
+            logger.warning("[Squad Manager] Could not persist dashboard heartbeat: %s", exc)
 
     def _portfolio_open_risk_usd(self) -> float:
         """Estimate worst-case loss to each active SL across the portfolio.
