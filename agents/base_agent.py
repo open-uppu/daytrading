@@ -157,7 +157,7 @@ class BaseSpecialistAgent(ABC):
         pass
 
     @abstractmethod
-    def evaluate_strategy_signal(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def evaluate_strategy_signal(self, df: pd.DataFrame, risk_band: str = "NORMAL") -> Dict[str, Any]:
         """
         Computes the asset-specific algorithmic trading signal.
         Returns dict with keys: 'action' (BUY/SELL/HOLD), 'sl', 'tp', 'reason', etc.
@@ -450,7 +450,7 @@ class BaseSpecialistAgent(ABC):
             return False, f"Cadence cooldown active ({rem}s remaining for 10-min target)"
         return True, f"Cooldown cleared ({int(elapsed)}s since last entry)"
 
-    def step(self, allow_new_entry: bool = True) -> Dict[str, Any]:
+    def step(self, allow_new_entry: bool = True, risk_band: str = "NORMAL") -> Dict[str, Any]:
         """
         Executes one complete autonomous analysis and execution cycle for this asset.
         """
@@ -639,7 +639,7 @@ class BaseSpecialistAgent(ABC):
         )
 
         # 7. Evaluate Strategy Signal
-        signal = self.evaluate_strategy_signal(df_main)
+        signal = self.evaluate_strategy_signal(df_main, risk_band)
         self.last_signal = signal
         action = signal.get("action", "HOLD")
         reason = signal.get("reason", "Waiting for setup confirmation")

@@ -481,3 +481,28 @@ def test_step_passes_recovery_risk_band_to_specialists(tmp_path, monkeypatch):
 
     squad.step()
     assert seen_risk_bands == ["RECOVERY"]
+
+
+def test_base_agent_step_threads_risk_band_to_evaluate_strategy_signal(temp_journal_dir, monkeypatch):
+    broker = PaperTradingBroker(initial_balance=10000.0)
+    agent = GoldSpecialistAgent(broker=broker, journal_dir=temp_journal_dir / "xauusd", timeframe="M15")
+
+    seen = []
+    def fake_evaluate(df, risk_band="NORMAL"):
+        seen.append(risk_band)
+        return {"action": "HOLD"}
+    monkeypatch.setattr(agent, "evaluate_strategy_signal", fake_evaluate)
+
+    n = 60
+    mock_df = pd.DataFrame({
+        "timestamp": pd.date_range("2026-08-01 10:00", periods=n, freq="15min"),
+        "open": [2000.0] * n, "high": [2001.0] * n, "low": [1999.0] * n,
+        "close": [2000.0] * n, "volume": [100] * n,
+    })
+    agent.broker.get_market_data = lambda symbol, timeframe="M15", bars=60: mock_df.copy()
+
+    agent.step(risk_band="RECOVERY")
+    assert seen == ["RECOVERY"]
+
+    agent.step()  # default
+    assert seen == ["RECOVERY", "NORMAL"]
