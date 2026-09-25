@@ -2,7 +2,6 @@
 import pytest
 import pandas as pd
 
-import backtest.strategies as strategies
 from backtest.data_loader import ASSET_SPECS
 from mt4.paper_broker import PaperTradingBroker
 
