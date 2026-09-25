@@ -179,7 +179,7 @@ def test_squad_manages_open_positions_when_risk_budget_exhausted():
     )
     
     # Portfolio open risk ($30) > 2% max daily loss ($20)
-    assert squad._portfolio_open_risk_usd() >= squad.starting_portfolio_balance * squad.max_loss_pct
+    assert squad._portfolio_open_risk_usd() >= squad.fixed_principal_usd * squad.max_loss_pct
 
     # Step squad: should NOT crash and should return MONITORING_POSITION for btc
     step_result = squad.step()

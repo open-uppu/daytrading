@@ -102,7 +102,8 @@ class SquadManager:
         initial_balance: Optional[float] = None,
         agents_to_enable: Optional[List[str]] = None,
         timeframe: str = "M5",
-        journal_dir: Optional[Path] = None
+        journal_dir: Optional[Path] = None,
+        fixed_principal_usd: Optional[float] = None
     ):
         self.broker_mode = broker_mode or config.broker_mode
         self.initial_balance = initial_balance or config.initial_balance
@@ -149,12 +150,15 @@ class SquadManager:
         # 2. Portfolio-Level Session & 3% Profit Target Tracker
         self.session_date: date = datetime.now(timezone.utc).date()
         self.starting_portfolio_balance: float = self._day_baseline(self.initial_balance)
+        self.fixed_principal_usd: float = fixed_principal_usd if fixed_principal_usd is not None else config.fixed_principal_usd
         self.target_pct: float = config.daily_target_pct  # 3.0% soft: specialists derisk, portfolio keeps trading
-        self.hard_target_pct: float = config.daily_target_hard_pct  # 10.0% hard: locks all trading
-        self.max_loss_pct: float = config.daily_max_loss_pct  # -3.0%
-        self.target_profit_usd: float = self.starting_portfolio_balance * self.target_pct
-        self.hard_target_profit_usd: float = self.starting_portfolio_balance * self.hard_target_pct
-        self.max_loss_usd: float = self.starting_portfolio_balance * self.max_loss_pct
+        self.hard_target_pct: float = config.daily_target_hard_pct  # 20.0% hard: locks all trading
+        self.recovery_loss_pct: float = config.daily_recovery_loss_pct  # 3.0%: new entries switch to recovery strategy
+        self.max_loss_pct: float = config.daily_max_loss_pct  # -5.0%: hard stop
+        self.target_profit_usd: float = self.fixed_principal_usd * self.target_pct
+        self.hard_target_profit_usd: float = self.fixed_principal_usd * self.hard_target_pct
+        self.recovery_loss_usd: float = self.fixed_principal_usd * self.recovery_loss_pct
+        self.max_loss_usd: float = self.fixed_principal_usd * self.max_loss_pct
 
         # 3. Instantiate Specialist Agents
         self.specialists: Dict[str, BaseSpecialistAgent] = {}
@@ -225,9 +229,10 @@ class SquadManager:
             self.session_date = today
             acc = self.broker.get_account_info()
             self.starting_portfolio_balance = self._day_baseline(acc["balance"])
-            self.target_profit_usd = self.starting_portfolio_balance * self.target_pct
-            self.hard_target_profit_usd = self.starting_portfolio_balance * self.hard_target_pct
-            self.max_loss_usd = self.starting_portfolio_balance * self.max_loss_pct
+            self.target_profit_usd = self.fixed_principal_usd * self.target_pct
+            self.hard_target_profit_usd = self.fixed_principal_usd * self.hard_target_pct
+            self.recovery_loss_usd = self.fixed_principal_usd * self.recovery_loss_pct
+            self.max_loss_usd = self.fixed_principal_usd * self.max_loss_pct
 
     def get_portfolio_daily_pnl(self) -> Dict[str, Any]:
         """Calculates aggregated realized and unrealized PnL across all specialist agents."""
@@ -256,11 +261,12 @@ class SquadManager:
         # otherwise an open position can exceed the cutoff before it closes.
         equity_pnl = current_equity - self.starting_portfolio_balance
 
-        daily_return_pct = round((total_realized_pnl / self.starting_portfolio_balance) * 100.0, 2) if self.starting_portfolio_balance > 0 else 0.0
-        equity_return_pct = round((equity_pnl / self.starting_portfolio_balance) * 100.0, 2) if self.starting_portfolio_balance > 0 else 0.0
+        daily_return_pct = round((total_realized_pnl / self.fixed_principal_usd) * 100.0, 2) if self.fixed_principal_usd > 0 else 0.0
+        equity_return_pct = round((equity_pnl / self.fixed_principal_usd) * 100.0, 2) if self.fixed_principal_usd > 0 else 0.0
 
         target_reached = daily_return_pct >= (self.target_pct * 100.0)
         hard_target_reached = daily_return_pct >= (self.hard_target_pct * 100.0)
+        recovery_reached = equity_return_pct <= -(self.recovery_loss_pct * 100.0)
         max_loss_reached = equity_return_pct <= -(self.max_loss_pct * 100.0)
 
         return {
@@ -277,6 +283,7 @@ class SquadManager:
             "target_reached": target_reached,
             "hard_target_reached": hard_target_reached,
             "max_loss_reached": max_loss_reached,
+            "recovery_reached": recovery_reached,
             "total_trades_today": total_trades_today,
             "total_wins_today": total_wins_today,
             "win_rate_today": round((total_wins_today / total_trades_today * 100.0), 1) if total_trades_today > 0 else 0.0
@@ -334,11 +341,19 @@ class SquadManager:
                 "specialist_results": {}
             }
 
-        portfolio_risk_reached = self._portfolio_open_risk_usd() >= (self.starting_portfolio_balance * self.max_loss_pct)
+        risk_band = "RECOVERY" if portfolio_status["recovery_reached"] else "NORMAL"
+        if risk_band == "RECOVERY":
+            logger.info(
+                f"[Squad Manager] Portfolio recovery band entered "
+                f"({portfolio_status['equity_return_pct']:.2f}%); specialists "
+                f"switching new entries to their recovery strategy. Open positions unaffected."
+            )
+
+        portfolio_risk_reached = self._portfolio_open_risk_usd() >= (self.fixed_principal_usd * self.max_loss_pct)
         agent_results = {}
         for key, agent in self.specialists.items():
             try:
-                res = agent.step(allow_new_entry=(not portfolio_risk_reached))
+                res = agent.step(allow_new_entry=(not portfolio_risk_reached), risk_band=risk_band)
                 agent_results[key] = res
             except Exception as e:
                 logger.error(f"[Squad Manager] Error during {agent.symbol} agent step: {e}", exc_info=True)
@@ -406,7 +421,7 @@ class SquadManager:
             except (KeyError, TypeError, ValueError):
                 # Unknown risk is unsafe: count it as the entire remaining
                 # budget so another order cannot be opened beside it.
-                return self.starting_portfolio_balance * self.max_loss_pct
+                return self.fixed_principal_usd * self.max_loss_pct
             total += distance * lots * contract_sizes.get(symbol, 1.0)
         return total
 

@@ -250,9 +250,10 @@ def test_squad_manager_orchestration():
     squad = SquadManager(
         broker=broker,
         initial_balance=10000.0,
+        fixed_principal_usd=10000.0,
         agents_to_enable=["gold", "btc", "eth"]
     )
-    
+
     assert len(squad.specialists) == 3
     assert "gold" in squad.specialists
     assert "btc" in squad.specialists
@@ -277,7 +278,7 @@ def test_squad_manager_portfolio_soft_target_does_not_lock(tmp_path):
     """Past the 3% soft target but under the 10% hard target must NOT stop
     the squad -- only the per-specialist risk_multiplier derisks."""
     broker = PaperTradingBroker(initial_balance=10000.0)
-    squad = SquadManager(broker=broker, initial_balance=10000.0, journal_dir=tmp_path)
+    squad = SquadManager(broker=broker, initial_balance=10000.0, fixed_principal_usd=10000.0, journal_dir=tmp_path)
 
     # Simulate Gold specialist booking a +$350 profit (exceeding 3% soft target of $300)
     squad.specialists["gold"].session_tracker.record_closed_trade(350.0)
@@ -297,7 +298,7 @@ def test_squad_manager_portfolio_soft_target_does_not_lock(tmp_path):
 def test_squad_manager_portfolio_hard_target_locks(tmp_path):
     """Past the 20% hard target must lock all trading."""
     broker = PaperTradingBroker(initial_balance=10000.0)
-    squad = SquadManager(broker=broker, initial_balance=10000.0, journal_dir=tmp_path)
+    squad = SquadManager(broker=broker, initial_balance=10000.0, fixed_principal_usd=10000.0, journal_dir=tmp_path)
 
     # Simulate Gold specialist booking a +$2050 profit (exceeding 20% hard target of $2000)
     squad.specialists["gold"].session_tracker.record_closed_trade(2050.0)
@@ -315,7 +316,7 @@ def test_live_squad_uses_terminal_balance_not_cli_default(monkeypatch):
     """A live risk limit must be based on the actual account, not $10k."""
     class LiveBroker(PaperTradingBroker):
         def get_account_info(self):
-            return {"balance": 500.0, "equity": 480.0}  # -4% equity, past the 3% max loss cutoff
+            return {"balance": 500.0, "equity": 480.0}  # -6.67% equity against the fixed $300 principal, past the 5% max loss cutoff
 
     squad = SquadManager(
         broker=LiveBroker(initial_balance=10_000.0),
@@ -326,7 +327,7 @@ def test_live_squad_uses_terminal_balance_not_cli_default(monkeypatch):
 
     status = squad.get_portfolio_daily_pnl()
     assert status["starting_balance"] == 500.0
-    assert status["target_profit_usd"] == 15.0
+    assert status["target_profit_usd"] == 9.0
     assert status["max_loss_reached"] is True
 
 
@@ -355,6 +356,7 @@ def test_portfolio_loss_cutoff_closes_floating_loss_positions():
     # Preserve the pre-existing position while making the session reference
     # balance explicit for this deterministic test.
     squad.starting_portfolio_balance = 10_000.0
+    squad.fixed_principal_usd = 5_000.0
     result = squad.step()
     assert result["status"] == "PORTFOLIO_MAX_LOSS_CUTOFF"
     assert opened["ticket"] not in [p["ticket"] for p in broker.get_open_positions()]
@@ -376,6 +378,7 @@ def test_run_loop_pauses_on_max_loss_cutoff_instead_of_exiting():
         agents_to_enable=[],
     )
     squad.starting_portfolio_balance = 10_000.0
+    squad.fixed_principal_usd = 5_000.0
 
     squad.run_loop(max_iterations=3, interval_sec=0)
 
@@ -405,3 +408,76 @@ def test_symbol_positions_filtered_by_own_magic(tmp_path):
 
     assert result_m5["position"]["ticket"] == res_m5["ticket"]
     assert result_m15["position"]["ticket"] == res_m15["ticket"]
+
+
+def test_fixed_principal_usd_denominator_overridable(tmp_path):
+    """Percentages must compute against fixed_principal_usd, not
+    starting_portfolio_balance, even when the two differ (e.g. account
+    already grew from a prior day's profit)."""
+    broker = PaperTradingBroker(initial_balance=10000.0)
+    squad = SquadManager(
+        broker=broker, broker_mode="mt5", initial_balance=10000.0,
+        fixed_principal_usd=300.0, journal_dir=tmp_path,
+    )
+    # Simulate a prior day's profit already baked into starting_portfolio_balance,
+    # decoupled from fixed_principal_usd.
+    squad.starting_portfolio_balance = 309.0
+    broker.balance = 315.0
+    broker.equity = 315.0
+
+    p_stat = squad.get_portfolio_daily_pnl()
+    # Numerator: today's real dollar move (315 - 309 = 6), unaffected by this change.
+    assert p_stat["realized_pnl_usd"] == pytest.approx(6.0)
+    # Denominator: fixed_principal_usd (300), NOT starting_portfolio_balance (309).
+    assert p_stat["daily_return_pct"] == pytest.approx(2.0)  # 6 / 300 * 100
+
+
+def test_recovery_reached_only_in_band(tmp_path):
+    broker = PaperTradingBroker(initial_balance=10000.0)
+    squad = SquadManager(
+        broker=broker, initial_balance=10000.0,
+        fixed_principal_usd=300.0, journal_dir=tmp_path,
+    )
+    squad.starting_portfolio_balance = 300.0
+
+    # -2%: above recovery threshold (-3%) -- neither band active.
+    broker.balance = 294.0
+    broker.equity = 294.0
+    p_stat = squad.get_portfolio_daily_pnl()
+    assert p_stat["recovery_reached"] is False
+    assert p_stat["max_loss_reached"] is False
+
+    # -4%: inside (-5%, -3%] recovery band.
+    broker.balance = 288.0
+    broker.equity = 288.0
+    p_stat = squad.get_portfolio_daily_pnl()
+    assert p_stat["recovery_reached"] is True
+    assert p_stat["max_loss_reached"] is False
+
+    # -6%: past the hard -5% cutoff -- recovery_reached also stays True but
+    # max_loss_reached governs (squad halts entirely, see step()).
+    broker.balance = 282.0
+    broker.equity = 282.0
+    p_stat = squad.get_portfolio_daily_pnl()
+    assert p_stat["max_loss_reached"] is True
+
+
+def test_step_passes_recovery_risk_band_to_specialists(tmp_path, monkeypatch):
+    broker = PaperTradingBroker(initial_balance=10000.0)
+    squad = SquadManager(
+        broker=broker, initial_balance=10000.0,
+        fixed_principal_usd=300.0, agents_to_enable=["xag"], journal_dir=tmp_path,
+    )
+    squad.starting_portfolio_balance = 300.0
+    broker.balance = 288.0  # -4%: inside recovery band
+    broker.equity = 288.0
+
+    seen_risk_bands = []
+    original_step = squad.specialists["xag"].step
+    def spy_step(*args, **kwargs):
+        seen_risk_bands.append(kwargs.get("risk_band"))
+        return original_step(*args, **kwargs)
+    monkeypatch.setattr(squad.specialists["xag"], "step", spy_step)
+
+    squad.step()
+    assert seen_risk_bands == ["RECOVERY"]
