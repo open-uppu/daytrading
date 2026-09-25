@@ -190,27 +190,58 @@ functions usable outside their currently-assigned specialist:
 `strategy_ema_pullback`, `strategy_sr_breakout`, `strategy_bb_reversion`,
 `strategy_mtf_momentum`, `strategy_agentic_confluence`. Before writing the
 implementation plan, run the existing CLI once per symbol —
-`python3 main.py backtest --market=<symbol> --timeframe=M15` — for all 9
-symbols (this dispatches to `evaluate_market_strategies()`, which already
-back-tests all 5 strategies per symbol and reports Max DD for each,
-per `backtest/run_cross_market_comparison.py:56-73`). For each specialist,
-the plan hardcodes an import of whichever of the 5 strategies showed the
-lowest Max Drawdown for that symbol (ties broken by highest win rate) as
-its recovery strategy — a plain Python import and one `if` branch per
-agent file, no runtime lookup or new config table.
+`python3 main.py backtest --market=<symbol> --timeframe=M15` — for the 6
+non-M5-tuned symbols (`eurusd, gbpusd, xagusd, xptusd, ukoil, xngusd`; see
+"Recovery band covers 6 of 9 specialists" below for why gold/btc/eth are
+excluded) — this dispatches to `evaluate_market_strategies()`, which
+already back-tests all 5 strategies per symbol and reports Max DD for each,
+per `backtest/run_cross_market_comparison.py:56-73`. For each of these 6
+specialists, the plan hardcodes an import of whichever of the 5 strategies
+showed the lowest Max Drawdown for that symbol (ties broken by highest win
+rate) as its recovery strategy — a plain Python import and one `if` branch
+per agent file, no runtime lookup or new config table. If a specialist's
+own current live strategy is already the lowest-DD one in its leaderboard,
+its "recovery strategy" is identical to its normal strategy — `RECOVERY`
+band becomes a no-op for that specialist (acceptable: it already runs the
+least-risky option available).
 
-### The 9 specialist agent files
+### Recovery band covers 6 of 9 specialists, not all 9
 
-Each of `agents/{gold,btc,eth,eur,gbp,xag,xpt,ukoil,xng}_agent.py` gets:
+Gold/BTC/ETH run `strategy_m5_scalper` on `timeframe="M5"`
+(`agents/gold_agent.py:85-88` and the equivalent branches in `btc_agent.py`,
+`eth_agent.py`) — a different backtest engine entirely
+(`backtest/run_m5_backtest.py`, explicitly out of scope for the generic
+5-strategy comparison per the prior multi-timeframe-backtest spec). There is
+no Max-DD-ranked alternate for M5 scalping to select a recovery strategy
+from, and feeding an M15-tuned strategy function M5-interval bars would run
+without crashing but with indicator lookback windows (e.g. a 20-period
+Bollinger Band spans 100 minutes on M5 vs. 300 minutes on M15) that were
+never validated at that resolution — silently different behavior from what
+the backtest gate scored.
+
+**Decision:** the RECOVERY band applies only to the 6 non-M5-tuned
+specialists: `eur, gbp, xag, xpt, ukoil, xng`. Gold/BTC/ETH are unaffected
+by `risk_band` entirely — they keep running `strategy_m5_scalper`
+unconditionally in both `NORMAL` and `RECOVERY` bands, and rely solely on
+the (unchanged, uniform) -5% `HALT` for protection, same as today. This is
+a real scope reduction from "all 9," not a cosmetic detail — flagged
+explicitly so it isn't rediscovered mid-implementation. Extending recovery
+coverage to the M5 scalpers is a separate, larger follow-up (would need its
+own M5-resolution strategy comparison tooling) and is out of scope here.
+
+### The 6 non-M5-tuned specialist agent files
+
+Each of `agents/{eur,gbp,xag,xpt,ukoil,xng}_agent.py` gets:
 1. One new import line for its assigned recovery strategy function (if it
    isn't already imported for its normal path).
 2. `evaluate_strategy_signal` signature gains `risk_band: str = "NORMAL"`.
 3. One new `if risk_band == "RECOVERY": return <recovery_fn>(df, current_idx=len(df) - 1)`
-   branch, placed before the existing normal-path return(s). Gold's M5
-   branch (`agents/gold_agent.py:85-88`) is untouched by this — recovery
-   only applies to the M15 generic-strategy path, consistent with "no
-   change to M5 scalper mechanics" from the prior multi-timeframe-backtest
-   spec.
+   branch, placed before the existing normal-path return.
+
+`agents/gold_agent.py`, `agents/btc_agent.py`, `agents/eth_agent.py` still
+need `evaluate_strategy_signal`'s signature updated to accept (and ignore)
+`risk_band: str = "NORMAL"`, to satisfy the abstract method's new shape —
+but their body doesn't branch on it.
 
 ### Existing open positions at any threshold
 

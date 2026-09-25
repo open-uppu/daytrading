@@ -78,24 +78,55 @@ New file `journal/consecutive_loss_days.json`, schema:
 - Inside `check_new_session()`'s existing new-day branch
   (`agents/squad_manager.py:220-230`), before resetting the portfolio
   tracker: read the file. If `last_evaluated_date` is yesterday relative to
-  the new session date, finalize yesterday's outcome: `streak = streak + 1
-  if today_hit_cutoff else 0`. Write `last_evaluated_date = <new date>`,
-  `today_hit_cutoff = false`, keep the (possibly just-incremented) `streak`.
-- If the finalized `streak >= 2`: call `harness.loss_review.run(specialists,
-  streak)` **synchronously, before this `check_new_session()` call
+  the new session date, compute (but do not yet persist) yesterday's
+  finalized streak: `pending_streak = streak + 1 if today_hit_cutoff else 0`.
+- If `pending_streak >= 2`: call `harness.loss_review.run(specialists,
+  pending_streak)` **synchronously, before this `check_new_session()` call
   returns** — i.e. before any specialist evaluates a new-day signal. The
   squad already isn't mid-position at this point (yesterday's HALT closed
   everything), so blocking the loop for the harness's analysis + LLM call +
   backtest gate (dominated by one LLM round-trip, low tens of seconds) costs
-  no missed trading opportunity. After `run()` returns, reset `streak = 0`
-  (a harness cycle always resolves the streak, pass or fail per specialist)
-  and continue `check_new_session()` as normal.
+  no missed trading opportunity.
+- **Only after `run()` returns** (whether it applied any overrides or not —
+  see "Anthropic API failure" below) write the state file:
+  `last_evaluated_date = <new date>`, `today_hit_cutoff = false`,
+  `streak = 0`. Writing this only after the harness call completes (not
+  before) means a process crash mid-harness-call leaves
+  `last_evaluated_date` stale, so the next process start re-detects the
+  same new-day transition and retries the whole check — the harness cycle
+  can never be silently skipped by a crash between finalizing the streak
+  and running it. If `pending_streak < 2`, skip straight to writing the
+  state file with `streak = pending_streak` (no harness call needed).
+
+### Anthropic API failure
+
+A network error, timeout, or auth failure (missing/invalid
+`ANTHROPIC_API_KEY`) calling the Messages API is **not** the same as a
+malformed response (handled per-specialist in "Candidate generation"
+below) — it means no candidates could be generated for this cycle at all.
+`harness.loss_review.run()` catches this at the top level, logs it clearly
+to `journal/harness_reports/<date>.md`, leaves every flagged specialist's
+existing assignment untouched (no overrides added or removed), and
+returns normally so `check_new_session()` still writes the state file and
+lets trading resume under whatever `NORMAL`/`RECOVERY` band the new day's
+equity already puts each specialist in. A harness cycle that could not run
+must never block real trading.
 
 ### Which specialists get a candidate
 
-`harness.loss_review.run()` first reads each specialist's trade journal
-entries (`journal/<symbol>/trades/*.md`) for the 2 flagged calendar days and
-sums realized PnL per specialist. Only specialists with a negative 2-day sum
+Gold/BTC/ETH are excluded from candidate generation entirely, for the same
+reason they're excluded from the RECOVERY band in
+`2026-09-25-fixed-principal-risk-bands-design.md` ("Recovery band covers 6
+of 9 specialists"): they run `strategy_m5_scalper` on a backtest engine
+(`backtest/run_m5_backtest.py`) that never produces a row in
+`evaluate_market_strategies()`'s leaderboard, so there is no "beat the
+current live strategy" baseline to gate a candidate against for these 3.
+They rely solely on the -5% `HALT` (unaffected by this spec) same as today.
+
+`harness.loss_review.run()` reads each of the remaining 6 non-M5-tuned
+specialists' (`eur, gbp, xag, xpt, ukoil, xng`) trade journal entries
+(`journal/<symbol>/trades/*.md`) for the 2 flagged calendar days and sums
+realized PnL per specialist. Only specialists with a negative 2-day sum
 proceed to candidate generation; the rest are left exactly as they are
 (whatever `agents/squad_manager.py` already assigns them — their normal
 strategy, or `RECOVERY` band strategy from the fixed-principal-risk-bands
@@ -229,6 +260,17 @@ no waiting on a human" while keeping the user able to see what happened.
 - Malformed/unparsable LLM response is treated as a gate failure for that
   specialist, not a crash of the whole harness run (other flagged
   specialists still get evaluated).
+- Simulated `httpx` network/timeout/auth error: `run()` returns normally,
+  no override written for any specialist, `journal/harness_reports/<date>.md`
+  records the failure, and the caller's state-file write still proceeds
+  (trading is never blocked by this failure).
+- Gold/BTC/ETH are never passed to candidate generation even when their
+  2-day journal PnL sum is negative.
+- Crash-safety: simulate `check_new_session()` finalizing `pending_streak
+  >= 2` and raise inside the harness call before it returns — assert the
+  state file's `last_evaluated_date` was NOT advanced, so a second call
+  (simulating process restart) re-detects the same new-day transition and
+  retries the harness cycle rather than silently skipping it.
 - `agents/base_agent.py::step()`: with `_harness_override_fn` set, it is
   called instead of `evaluate_strategy_signal` regardless of `risk_band`;
   with it unset (`None`, the default), behavior is byte-identical to
