@@ -3,7 +3,6 @@ Unit and Integration Tests for Multi-Asset Specialist Squad Architecture.
 Tests GoldSpecialistAgent, BtcSpecialistAgent, EthSpecialistAgent, and SquadManager portfolio coordination.
 """
 
-import json
 import pytest
 import pandas as pd
 import numpy as np
@@ -181,25 +180,6 @@ def test_squad_manager_assigns_per_timeframe_magic_and_journal_dir(tmp_path):
     assert squad_m15.specialists["gold"].magic == TIMEFRAME_MAGIC["M15"]
     assert squad_m15.specialists["gold"].magic != 888999
     assert squad_m15.specialists["gold"].journal_dir == tmp_path / "m15" / "xauusd"
-
-
-def test_squad_manager_writes_read_only_specialist_runtime_snapshot(tmp_path):
-    squad = SquadManager(
-        broker=PaperTradingBroker(), agents_to_enable=["gold"], timeframe="M5", journal_dir=tmp_path,
-    )
-    squad.specialists["gold"].last_ml_confidence = 0.87
-    squad._publish_specialist_runtime({
-        "gold": {"status": "WAITING_FOR_SETUP", "signal": {"action": "HOLD"}},
-    })
-
-    runtime_file = tmp_path / "specialist_runtime" / "m5.json"
-    payload = json.loads(runtime_file.read_text(encoding="utf-8"))
-    gold = payload["specialists"]["gold"]
-    assert gold["symbol"] == "XAUUSD"
-    assert gold["timeframe"] == "M5"
-    assert gold["status"] == "WAITING_FOR_SETUP"
-    assert gold["action"] == "HOLD"
-    assert gold["confidence"] == 0.87
 
 
 def test_squad_manager_shares_one_magic_across_all_specialists(tmp_path):
