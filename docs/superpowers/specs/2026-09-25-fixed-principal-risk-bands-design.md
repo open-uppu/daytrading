@@ -188,22 +188,42 @@ of the 9 subclasses is then updated individually (below).
 `backtest/strategies.py` already has 5 generic, symbol-agnostic strategy
 functions usable outside their currently-assigned specialist:
 `strategy_ema_pullback`, `strategy_sr_breakout`, `strategy_bb_reversion`,
-`strategy_mtf_momentum`, `strategy_agentic_confluence`. Before writing the
-implementation plan, run the existing CLI once per symbol —
-`python3 main.py backtest --market=<symbol> --timeframe=M15` — for the 6
-non-M5-tuned symbols (`eurusd, gbpusd, xagusd, xptusd, ukoil, xngusd`; see
-"Recovery band covers 6 of 9 specialists" below for why gold/btc/eth are
-excluded) — this dispatches to `evaluate_market_strategies()`, which
-already back-tests all 5 strategies per symbol and reports Max DD for each,
-per `backtest/run_cross_market_comparison.py:56-73`. For each of these 6
-specialists, the plan hardcodes an import of whichever of the 5 strategies
-showed the lowest Max Drawdown for that symbol (ties broken by highest win
-rate) as its recovery strategy — a plain Python import and one `if` branch
-per agent file, no runtime lookup or new config table. If a specialist's
-own current live strategy is already the lowest-DD one in its leaderboard,
-its "recovery strategy" is identical to its normal strategy — `RECOVERY`
-band becomes a no-op for that specialist (acceptable: it already runs the
-least-risky option available).
+`strategy_mtf_momentum`, `strategy_agentic_confluence`. Run (already done, 2026-09-25, `python3 main.py backtest --market=<symbol>
+--timeframe=M15` for `eur, gbp, silver, platinum, ukoil, gas` — note the CLI
+aliases are `silver`/`platinum`, not `xag`/`xpt`) — this dispatches to
+`evaluate_market_strategies()`, which back-tests all 5 strategies per
+symbol and reports Max DD for each
+(`backtest/run_cross_market_comparison.py:56-73`). Results:
+
+| Specialist | Current live (Return/DD) | Lowest-DD alternative (Return/DD) |
+|---|---|---|
+| EUR | D mtf_momentum: +2.65% / 3.84% | D itself (already lowest) |
+| GBP | A ema_pullback: +0.01% / 4.52% | D mtf_momentum: **-0.32%** / 3.50% |
+| XAG (silver) | C bb_reversion: +5.66% / 2.25% | E agentic_confluence: **+0.40%** / 0.67% |
+| XPT (platinum) | E agentic_confluence: +2.33% / 4.51% | E itself (already lowest) |
+| UKOIL | C bb_reversion: +3.54% / 15.62% | E agentic_confluence: **-1.52%** / 2.30% |
+| XNG (gas) | A ema_pullback: +1.82% / 6.02% | E agentic_confluence: **-1.61%** / 2.45% |
+
+**Corrected selection rule** (the raw "pick lowest Max DD" rule from the
+original draft of this spec produced a bad outcome once run against real
+data): for GBP/UKOIL/XNG, the lowest-DD alternative in the pool has a
+**negative** backtest return — switching a struggling specialist into a
+strategy that *itself* loses money in backtest, just with a smaller
+drawdown, defeats the purpose of a recovery band. The rule is: **pick the
+lowest-DD strategy among only those with a non-negative backtest return**;
+if no alternative (other than the specialist's own current strategy)
+clears that bar, the specialist keeps its current strategy — `RECOVERY`
+band is a no-op for it, which is the correct, capital-protective outcome
+when no genuinely better option exists.
+
+Applying the corrected rule to the table above: **only XAG actually
+swaps** (`strategy_bb_reversion` → `strategy_agentic_confluence` — lower
+DD *and* positive return). EUR, GBP, XPT, UKOIL, XNG are all no-ops —
+each keeps calling its existing normal-path strategy function in both
+`NORMAL` and `RECOVERY` bands. Their `evaluate_strategy_signal` still
+gains the `risk_band: str = "NORMAL"` parameter (required by the abstract
+method's new shared signature), but their function body does not need an
+`if risk_band == "RECOVERY"` branch — there being nothing to branch to.
 
 ### Recovery band covers 6 of 9 specialists, not all 9
 
@@ -229,19 +249,25 @@ explicitly so it isn't rediscovered mid-implementation. Extending recovery
 coverage to the M5 scalpers is a separate, larger follow-up (would need its
 own M5-resolution strategy comparison tooling) and is out of scope here.
 
-### The 6 non-M5-tuned specialist agent files
+### The 9 specialist agent files
 
-Each of `agents/{eur,gbp,xag,xpt,ukoil,xng}_agent.py` gets:
-1. One new import line for its assigned recovery strategy function (if it
-   isn't already imported for its normal path).
-2. `evaluate_strategy_signal` signature gains `risk_band: str = "NORMAL"`.
-3. One new `if risk_band == "RECOVERY": return <recovery_fn>(df, current_idx=len(df) - 1)`
-   branch, placed before the existing normal-path return.
+All 9 (`agents/{gold,btc,eth,eur,gbp,xag,xpt,ukoil,xng}_agent.py`) get
+`evaluate_strategy_signal`'s signature updated to accept (and, for 8 of the
+9, ignore) `risk_band: str = "NORMAL"`, to satisfy the abstract method's
+new shared shape.
 
-`agents/gold_agent.py`, `agents/btc_agent.py`, `agents/eth_agent.py` still
-need `evaluate_strategy_signal`'s signature updated to accept (and ignore)
-`risk_band: str = "NORMAL"`, to satisfy the abstract method's new shape —
-but their body doesn't branch on it.
+Only `agents/xag_agent.py` gets real branching, per the corrected
+selection rule above:
+1. Add `strategy_agentic_confluence` to its existing
+   `from backtest.strategies import strategy_bb_reversion` import line.
+2. One new `if risk_band == "RECOVERY": return strategy_agentic_confluence(df, current_idx=len(df) - 1)`
+   branch, placed before the existing `return strategy_bb_reversion(...)`.
+
+The other 8 files (`gold, btc, eth, eur, gbp, xpt, ukoil, xng`) need no
+behavioral change — for gold/btc/eth this is because they're excluded from
+`RECOVERY` entirely (see above); for eur/gbp/xpt/ukoil/xng it's because the
+corrected selection rule found no alternative worth switching to, so their
+current strategy already *is* their recovery strategy.
 
 ### Existing open positions at any threshold
 
@@ -264,11 +290,14 @@ exactly like today's -3% hard stop does.
 - New test: `recovery_reached` is `True` only in the (-5%, -3%] band, `False`
   outside it (both above -3% and below -5%, where `max_loss_reached` alone
   governs).
-- New test: `agent.step(risk_band="RECOVERY")` on a specialist calls the
-  recovery strategy function, not the normal one; `risk_band="NORMAL"`
-  (or omitted) preserves today's exact call. Existing tests that call
-  `step()` without `risk_band` must keep passing unmodified (default value
-  preserves current behavior byte-for-byte).
+- New test: `XagSpecialistAgent.evaluate_strategy_signal(df, risk_band="RECOVERY")`
+  calls `strategy_agentic_confluence`, not `strategy_bb_reversion`;
+  `risk_band="NORMAL"` (or omitted) still calls `strategy_bb_reversion`.
+  For the other 8 specialists, assert `risk_band="RECOVERY"` produces the
+  identical call as `risk_band="NORMAL"` (proving the no-op is intentional,
+  not an oversight). Existing tests that call `step()`/
+  `evaluate_strategy_signal()` without `risk_band` must keep passing
+  unmodified (default value preserves current behavior byte-for-byte).
 - Run `pytest tests/ -q` after each change; must stay green throughout.
 
 ## Self-Review Notes
