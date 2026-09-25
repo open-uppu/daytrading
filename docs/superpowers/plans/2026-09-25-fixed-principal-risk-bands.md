@@ -454,14 +454,49 @@ git commit -m "feat(base-agent): thread risk_band through step() to evaluate_str
 
 ---
 
-### Task 4: The 9 specialist agent files
+### Task 4: The 9 specialist agent files + 5 test-mock signature fixes
+
+**Scope note (added after Task 3's implementation):** Task 3 made
+`agents/base_agent.py::step()` call
+`self.evaluate_strategy_signal(df_main, risk_band)` — 2 positional args,
+always. This breaks not only the 9 real subclass overrides (fixed below)
+but also every test that monkeypatches `agent.evaluate_strategy_signal`
+with a bare one-argument `lambda df: {...}` — the lambda receives the same
+2-positional-arg call and raises `TypeError: <lambda>() takes 1 positional
+argument but 2 were given`. Task 3's implementer found and enumerated
+exactly 5 such tests while verifying the full suite; this task now also
+fixes those 5, in addition to its original 9-agent-file scope.
 
 **Files:**
 - Modify: `agents/gold_agent.py:81`, `agents/btc_agent.py:61`, `agents/eth_agent.py:62`,
   `agents/eur_agent.py:57`, `agents/gbp_agent.py:58`, `agents/xpt_agent.py:57`,
   `agents/ukoil_agent.py:63`, `agents/xng_agent.py:63` (signature-only)
 - Modify: `agents/xag_agent.py:13,57` (real behavioral branch)
+- Modify: `tests/test_agent_concurrency.py:62,88`, `tests/test_mt5_bridge.py:332`,
+  `tests/test_strategy_enhancements.py:70,133` (5 test-mock lambda signatures)
 - Test: `tests/test_new_market_agents.py` (new), `tests/test_agents.py` (spot checks for gold/btc/eth)
+
+#### Step 0: Fix the 5 test-mock lambda signatures
+
+In each of these 5 locations, the existing monkeypatch is a bare one-arg
+lambda standing in for a real specialist's `evaluate_strategy_signal`. Change
+each from `lambda df: <body>` to `lambda df, risk_band="NORMAL": <body>` —
+same pattern as the real abstract method's new default, ignoring the new
+parameter since these tests don't exercise risk-band routing:
+
+- `tests/test_agent_concurrency.py:62`: `agent.evaluate_strategy_signal = lambda df: {...}` → add `, risk_band="NORMAL"` after `df`
+- `tests/test_agent_concurrency.py:88`: same pattern
+- `tests/test_mt5_bridge.py:332`: same pattern
+- `tests/test_strategy_enhancements.py:70`: same pattern
+- `tests/test_strategy_enhancements.py:133`: same pattern (this is
+  `test_cadence_pacer_periodic_entry` — the same test Task 3's brief cited
+  as proof `n=60` mock rows are sufficient; confirm that reasoning still
+  holds once this lambda is fixed, since it's now failing for the
+  unrelated signature reason, not a row-count reason)
+
+Run `grep -n "evaluate_strategy_signal = lambda" tests/*.py` first to
+confirm these are the only 5 occurrences (Task 3's implementer's list) —
+if you find a 6th, fix it too and note it in your report.
 
 **Interfaces:**
 - Consumes: `evaluate_strategy_signal(self, df, risk_band: str = "NORMAL")` abstract shape from Task 3.
@@ -617,6 +652,6 @@ been updated, not just made to coincidentally still pass.
 #### Step 7: Commit
 
 ```bash
-git add agents/gold_agent.py agents/btc_agent.py agents/eth_agent.py agents/eur_agent.py agents/gbp_agent.py agents/xpt_agent.py agents/ukoil_agent.py agents/xng_agent.py agents/xag_agent.py tests/test_new_market_agents.py tests/test_agents.py
-git commit -m "feat(agents): thread risk_band through all 9 specialists; XAG gets real RECOVERY branch"
+git add agents/gold_agent.py agents/btc_agent.py agents/eth_agent.py agents/eur_agent.py agents/gbp_agent.py agents/xpt_agent.py agents/ukoil_agent.py agents/xng_agent.py agents/xag_agent.py tests/test_new_market_agents.py tests/test_agents.py tests/test_agent_concurrency.py tests/test_mt5_bridge.py tests/test_strategy_enhancements.py
+git commit -m "feat(agents): thread risk_band through all 9 specialists + 5 test mocks; XAG gets real RECOVERY branch"
 ```
