@@ -67,7 +67,7 @@ def test_mtf_macro_trend_filter():
         )
         
         # Mock signal to BUY
-        agent.evaluate_strategy_signal = lambda _df: {
+        agent.evaluate_strategy_signal = lambda _df, risk_band="NORMAL": {
             "action": "BUY",
             "sl": 2490.0,
             "tp": 2520.0,
@@ -130,7 +130,7 @@ def test_cadence_pacer_periodic_entry():
             min_entry_interval_sec=600
         )
         # Force evaluate_strategy_signal to return HOLD
-        agent.evaluate_strategy_signal = lambda df: {"action": "HOLD"}
+        agent.evaluate_strategy_signal = lambda df, risk_band="NORMAL": {"action": "HOLD"}
         
         # Create active trending market data
         n = 60

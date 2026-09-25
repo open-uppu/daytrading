@@ -58,7 +58,7 @@ class BtcSpecialistAgent(BaseSpecialistAgent):
     def strategy_name(self) -> str:
         return "M5_Scalper_BTC" if self.timeframe == "M5" else "EMA_Pullback_Rejection_A"
 
-    def evaluate_strategy_signal(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def evaluate_strategy_signal(self, df: pd.DataFrame, risk_band: str = "NORMAL") -> Dict[str, Any]:
         """
         Evaluates M5 Scalper or M15 Strategy A.
         """

@@ -60,7 +60,7 @@ class UkoilSpecialistAgent(BaseSpecialistAgent):
     def strategy_name(self) -> str:
         return "BB_Reversion_C"
 
-    def evaluate_strategy_signal(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def evaluate_strategy_signal(self, df: pd.DataFrame, risk_band: str = "NORMAL") -> Dict[str, Any]:
         if self.timeframe != "M15":
             raise NotImplementedError("UKOIL only has a validated M15 strategy; M5 is a separate future spec.")
         return strategy_bb_reversion(df, current_idx=len(df) - 1)

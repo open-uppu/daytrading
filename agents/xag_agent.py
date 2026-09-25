@@ -10,7 +10,7 @@ import pandas as pd
 import logging
 
 from agents.base_agent import BaseSpecialistAgent
-from backtest.strategies import strategy_bb_reversion
+from backtest.strategies import strategy_bb_reversion, strategy_agentic_confluence
 from backtest.data_loader import ASSET_SPECS
 from mt4.broker_interface import BaseBroker
 
@@ -54,7 +54,14 @@ class SilverSpecialistAgent(BaseSpecialistAgent):
     def strategy_name(self) -> str:
         return "BB_Reversion_C"
 
-    def evaluate_strategy_signal(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def evaluate_strategy_signal(self, df: pd.DataFrame, risk_band: str = "NORMAL") -> Dict[str, Any]:
         if self.timeframe != "M15":
             raise NotImplementedError("Silver only has a validated M15 strategy; M5 is a separate future spec.")
+        if risk_band == "RECOVERY":
+            # 2026-09-25 M15 backtest: Strategy E (agentic_confluence) had
+            # both lower Max DD (0.67% vs 2.25%) and a positive return
+            # (+0.40%) vs. this specialist's normal Strategy C -- the only
+            # one of the 9 specialists where a genuinely better recovery
+            # option exists.
+            return strategy_agentic_confluence(df, current_idx=len(df) - 1)
         return strategy_bb_reversion(df, current_idx=len(df) - 1)

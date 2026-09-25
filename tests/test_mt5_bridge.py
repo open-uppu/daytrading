@@ -329,7 +329,7 @@ def test_single_specialist_smoke_cycle_reaches_ea_confirmation():
             broker=broker, broker_mode="mt5", initial_balance=10000.0,
             journal_dir=Path(tmp) / "xauusd",
         )
-        agent.evaluate_strategy_signal = lambda _df: {
+        agent.evaluate_strategy_signal = lambda _df, risk_band="NORMAL": {
             "action": "BUY", "sl": 2648.0, "tp": 2654.0,
             "reason": "smoke-test",
         }

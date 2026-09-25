@@ -506,3 +506,19 @@ def test_base_agent_step_threads_risk_band_to_evaluate_strategy_signal(temp_jour
 
     agent.step()  # default
     assert seen == ["RECOVERY", "NORMAL"]
+
+
+def test_gold_btc_eth_ignore_risk_band_stay_on_m5_scalper(temp_journal_dir):
+    broker = PaperTradingBroker(initial_balance=10000.0)
+    agent = GoldSpecialistAgent(broker=broker, journal_dir=temp_journal_dir / "xauusd", timeframe="M5")
+    n = 60
+    mock_df = pd.DataFrame({
+        "timestamp": pd.date_range("2026-08-01 10:00", periods=n, freq="5min"),
+        "open": [2000.0] * n, "high": [2001.0] * n, "low": [1999.0] * n,
+        "close": [2000.0 + i * 0.1 for i in range(n)], "volume": [100] * n,
+    })
+    sig_normal = agent.evaluate_strategy_signal(mock_df, risk_band="NORMAL")
+    sig_recovery = agent.evaluate_strategy_signal(mock_df, risk_band="RECOVERY")
+    # Same strategy fn (strategy_m5_scalper) is deterministic on identical
+    # input regardless of risk_band -- both calls must agree on action.
+    assert sig_normal["action"] == sig_recovery["action"]

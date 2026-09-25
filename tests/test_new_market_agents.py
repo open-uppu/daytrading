@@ -2,6 +2,7 @@
 import pytest
 import pandas as pd
 
+import backtest.strategies as strategies
 from backtest.data_loader import ASSET_SPECS
 from mt4.paper_broker import PaperTradingBroker
 
@@ -87,3 +88,47 @@ def test_non_m15_timeframe_raises_not_implemented(broker, module_path, class_nam
     df = pd.DataFrame({"close": [1.0] * 40, "high": [1.0] * 40, "low": [1.0] * 40, "open": [1.0] * 40})
     with pytest.raises(NotImplementedError):
         agent.evaluate_strategy_signal(df)
+
+
+def test_xag_recovery_band_switches_to_agentic_confluence(broker, monkeypatch):
+    from agents.xag_agent import SilverSpecialistAgent
+    import agents.xag_agent as xag_module
+    agent = SilverSpecialistAgent(broker=broker)
+    df = pd.DataFrame({"close": [1.0, 2.0, 3.0]})
+
+    monkeypatch.setattr(xag_module, "strategy_bb_reversion",
+                         lambda df, current_idx: {"action": "HOLD", "picked": "normal"})
+    monkeypatch.setattr(xag_module, "strategy_agentic_confluence",
+                         lambda df, current_idx: {"action": "HOLD", "picked": "recovery"})
+
+    assert agent.evaluate_strategy_signal(df)["picked"] == "normal"
+    assert agent.evaluate_strategy_signal(df, risk_band="NORMAL")["picked"] == "normal"
+    assert agent.evaluate_strategy_signal(df, risk_band="RECOVERY")["picked"] == "recovery"
+
+
+@pytest.mark.parametrize("agent_module,agent_class,strategy_attr", [
+    ("agents.eur_agent", "EurSpecialistAgent", "strategy_mtf_momentum"),
+    ("agents.gbp_agent", "GbpSpecialistAgent", "strategy_ema_pullback"),
+    ("agents.xpt_agent", "PlatinumSpecialistAgent", "strategy_agentic_confluence"),
+    ("agents.ukoil_agent", "UkoilSpecialistAgent", "strategy_bb_reversion"),
+    ("agents.xng_agent", "NaturalGasSpecialistAgent", "strategy_ema_pullback"),
+])
+def test_five_specialists_recovery_band_is_a_noop(broker, monkeypatch, agent_module, agent_class, strategy_attr):
+    """Confirmed no-ops (2026-09-25 M15 backtest data found no alternative
+    strategy for these 5 that beats their current live one) -- RECOVERY
+    must call the exact same strategy function as NORMAL."""
+    import importlib
+    mod = importlib.import_module(agent_module)
+    cls = getattr(mod, agent_class)
+    agent = cls(broker=broker)
+    df = pd.DataFrame({"close": [1.0, 2.0, 3.0]})
+
+    calls = []
+    def fake_strategy(df, current_idx):
+        calls.append(current_idx)
+        return {"action": "HOLD"}
+    monkeypatch.setattr(mod, strategy_attr, fake_strategy)
+
+    agent.evaluate_strategy_signal(df, risk_band="NORMAL")
+    agent.evaluate_strategy_signal(df, risk_band="RECOVERY")
+    assert len(calls) == 2  # both calls went through -- same function, no branch skipped either

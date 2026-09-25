@@ -59,7 +59,7 @@ def test_cooldown_blocks_retry_after_failed_order_dispatch(monkeypatch, tmp_path
     monkeypatch.setattr(config, "timeframe_htf", None)
     monkeypatch.setattr(config, "ml_filter_enabled", False)
     monkeypatch.setattr(agent.pre_trade_filter, "evaluate_proposal", lambda **kw: (True, "test bypass"))
-    agent.evaluate_strategy_signal = lambda df: {
+    agent.evaluate_strategy_signal = lambda df, risk_band="NORMAL": {
         "action": "BUY",
         "sl": round(float(df.iloc[-1]["close"]) - 10, 2),
         "tp": round(float(df.iloc[-1]["close"]) + 20, 2),
@@ -85,7 +85,7 @@ def test_cadence_pacer_uses_the_same_075_ml_threshold_as_real_signals(monkeypatc
     broker = PaperTradingBroker(initial_balance=10000.0)
     agent = GoldSpecialistAgent(broker=broker, timeframe="M5")
     agent.last_entry_time = datetime.now() - timedelta(seconds=agent.min_entry_interval_sec + 5)
-    agent.evaluate_strategy_signal = lambda df: {"action": "HOLD"}
+    agent.evaluate_strategy_signal = lambda df, risk_band="NORMAL": {"action": "HOLD"}
     monkeypatch.setattr(agent.pre_trade_filter, "evaluate_proposal", lambda **kw: (True, "test bypass"))
 
     captured = {}
