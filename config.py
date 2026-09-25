@@ -15,10 +15,12 @@ class TradingConfig(BaseSettings):
     
     # Financial & Risk Parameters
     initial_balance: float = 10000.0
+    fixed_principal_usd: float = 300.0  # ~10,000 THB; the user's fixed reference capital for ALL daily % calculations (soft/hard target, recovery, max loss) -- deliberately independent of the live/compounding account balance
     daily_target_pct: float = 0.03   # 3% soft target/day: risk per trade is halved past this
     daily_target_hard_pct: float = 0.20  # 20% hard target/day: trading locks entirely past this
     daily_target_derisk_factor: float = 0.5  # risk-per-trade multiplier between soft and hard target
-    daily_max_loss_pct: float = 0.03 # 3% max daily loss cutoff ($300 on $10,000)
+    daily_max_loss_pct: float = 0.05 # 5% hard-stop max daily loss cutoff (close everything, halt for the day) -- against fixed_principal_usd, not the live balance
+    daily_recovery_loss_pct: float = 0.03  # 3%: new entries switch to each specialist's designated recovery strategy (only XAG has one); open positions untouched
     risk_per_trade_pct: float = 0.005  # 0.5% per trade for high-frequency scalping
     min_rr_ratio: float = 1.3        # Minimum 1:1.3 Risk-to-Reward ratio
     target_rr_ratio: float = 2.0     # Default 1:2.0 RR (M5 scalper overrides to 1:1.5)
