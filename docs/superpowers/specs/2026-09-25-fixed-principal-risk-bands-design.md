@@ -108,14 +108,66 @@ daily_max_loss_pct: float = 0.05  # was 0.03; -5% hard stop (close everything, h
 
 ### `agents/squad_manager.py`
 
-**New attributes in `__init__` (near `agents/squad_manager.py:151-157`):**
+**New constructor parameter and attributes in `__init__` (near
+`agents/squad_manager.py:151-157`):**
+
+`SquadManager.__init__` gains `fixed_principal_usd: Optional[float] =
+None`. Existing tests construct `SquadManager` with a test-specific
+`initial_balance` (10000.0, 500.0, 1000.0, ...) and assert exact percentage
+values computed against that number — if the denominator became a bare
+module-level `config.fixed_principal_usd` read with no override, every one
+of those tests would silently start computing against the production
+default (300.0) instead of the number the test explicitly chose,
+breaking their assertions. A constructor parameter keeps the same
+explicit-dependency pattern `initial_balance` itself already uses:
 ```python
-self.fixed_principal_usd: float = config.fixed_principal_usd
+self.fixed_principal_usd: float = fixed_principal_usd if fixed_principal_usd is not None else config.fixed_principal_usd
 self.recovery_loss_pct: float = config.daily_recovery_loss_pct
 ```
 `self.starting_portfolio_balance` stays exactly as it is today (still
 sourced from `_day_baseline`) — it continues to mean "today's opening real
 balance," used only for the P&L numerator.
+
+**Existing tests that must be updated as part of this change** (found via
+`grep -rn "daily_return_pct ==\|target_profit_usd ==\|max_loss_reached\|starting_portfolio_balance" tests/`):
+- `tests/test_agents.py::test_squad_manager_portfolio_soft_target_does_not_lock`
+  and `::test_squad_manager_portfolio_hard_target_locks`: both construct
+  `SquadManager(initial_balance=10000.0, ...)` and assert exact
+  `daily_return_pct` values computed against 10000. Add
+  `fixed_principal_usd=10000.0` to each constructor call so the existing
+  assertions (`3.5`, `20.5`) keep meaning what they said.
+- `tests/test_agents.py::test_live_squad_uses_terminal_balance_not_cli_default`:
+  asserts `status["target_profit_usd"] == 15.0` (was `starting_balance(500)
+  * target_pct(0.03)`). Leave this test's `SquadManager(...)` construction
+  as-is (no `fixed_principal_usd` override — it's specifically testing that
+  `starting_balance` in the status dict reflects the live terminal balance,
+  not the `initial_balance` CLI default, and that must keep working
+  unchanged). Update the assertion to
+  `assert status["target_profit_usd"] == 9.0` (`config.fixed_principal_usd`
+  default 300.0 × 0.03) and update the docstring's stale `"-4% equity, past
+  the 3% max loss cutoff"` comment to `"-6.67% equity against the fixed
+  $300 principal, past the 5% max loss cutoff"` (still `max_loss_reached is
+  True` — (480-500)/300.0 = -6.67%, past the new -5% threshold, so that
+  assertion needs no change).
+- `tests/test_agents.py::test_portfolio_loss_cutoff_closes_floating_loss_positions`
+  and `::test_run_loop_pauses_on_max_loss_cutoff_instead_of_exiting`: both
+  manually set `squad.starting_portfolio_balance = 10_000.0` after
+  construction to make a $300 floating loss (a $3 adverse move × 100
+  contract_size × 1.0 lot on XAUUSD) deterministically cross the old 3%
+  cutoff. `starting_portfolio_balance` no longer drives the cutoff
+  threshold, so add one new line after it in both tests:
+  `squad.fixed_principal_usd = 5_000.0` — the same $300 loss is then
+  -6% against 5000, past the new -5% threshold, keeping both tests'
+  outcome (`PORTFOLIO_MAX_LOSS_CUTOFF` fires) unchanged.
+- `tests/test_strategy_enhancements.py::test_squad_manages_open_positions_when_risk_budget_exhausted`:
+  change the assertion
+  `squad._portfolio_open_risk_usd() >= squad.starting_portfolio_balance * squad.max_loss_pct`
+  to `squad._portfolio_open_risk_usd() >= squad.fixed_principal_usd *
+  squad.max_loss_pct`, matching the corrected formula at
+  `agents/squad_manager.py:337`. With the 300.0 default this is `$30 >=
+  $15.0`, still `True` — only the attribute referenced changes, to test
+  the actual post-change formula instead of one that happens to still
+  numerically hold by coincidence.
 
 **Denominator swap.** Everywhere `self.starting_portfolio_balance` is
 currently used as a percentage denominator or to scale a threshold into a
