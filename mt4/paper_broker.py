@@ -34,31 +34,36 @@ class PaperTradingBroker(BaseBroker):
         self.open_positions: Dict[int, Dict[str, Any]] = {}
         self.closed_orders: List[Dict[str, Any]] = []
         self.recently_closed_orders: List[Dict[str, Any]] = []
-        
-        # Historical / Cached Candles
-        self.m15_data: pd.DataFrame = self._generate_initial_data(bars=120)
-        self.current_price: float = float(self.m15_data.iloc[-1]['close'])
 
-    def _generate_initial_data(self, bars: int = 120) -> pd.DataFrame:
+        # Historical / Cached Candles.  Keep both timeframes because the M5
+        # squad (default paper mode, and the new Docker image CMD) calls
+        # get_market_data(..., timeframe="M5"), while analyze / older flows
+        # still ask for M15.
+        self.m15_data: pd.DataFrame = self._generate_initial_data(bars=120, timeframe="M15")
+        self.m5_data: pd.DataFrame = self._generate_initial_data(bars=240, timeframe="M5")
+        self.current_price: float = float(self.m5_data.iloc[-1]['close'])
+
+    def _generate_initial_data(self, bars: int = 120, timeframe: str = "M15") -> pd.DataFrame:
         """Generates realistic trending and oscillating Gold candlestick data."""
         np.random.seed(42)
         base = 2650.0
         closes = [base]
-        
+
         # Create moderate trends and pullbacks
         for i in range(bars - 1):
             drift = 0.2 * np.sin(i / 10.0)
             noise = np.random.normal(0, 1.8)
             closes.append(round(closes[-1] + drift + noise, 2))
-            
+
         closes = np.array(closes)
         highs = np.round(closes + np.abs(np.random.normal(1.2, 0.6, bars)), 2)
         lows = np.round(closes - np.abs(np.random.normal(1.2, 0.6, bars)), 2)
         opens = np.round(closes + np.random.normal(0, 0.8, bars), 2)
         volume = np.random.randint(100, 2500, bars)
-        
-        dates = pd.date_range(end=datetime.now(), periods=bars, freq='15min')
-        
+
+        freq = '5min' if timeframe.upper() == 'M5' else '15min'
+        dates = pd.date_range(end=datetime.now(), periods=bars, freq=freq)
+
         return pd.DataFrame({
             'timestamp': dates,
             'open': opens,
@@ -81,7 +86,9 @@ class PaperTradingBroker(BaseBroker):
         }
 
     def get_market_data(self, symbol: str = "XAUUSD", timeframe: str = "M15", bars: int = 100) -> pd.DataFrame:
-        """Returns recent OHLCV bars."""
+        """Returns recent OHLCV bars for the requested timeframe (M5 or M15)."""
+        if timeframe.upper() == "M5":
+            return self.m5_data.tail(bars).copy().reset_index(drop=True)
         return self.m15_data.tail(bars).copy().reset_index(drop=True)
 
     def open_order(

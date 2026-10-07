@@ -1,0 +1,34 @@
+# Force LF for text files checked into the repo. Prevents CRLF from Windows
+# checkouts breaking shell scripts or Python source inside Linux containers.
+* text=auto eol=lf
+
+# Python source should always be LF in the container image
+*.py text eol=lf
+
+# Shell scripts (if any are added later)
+*.sh text eol=lf
+
+# Docker & config files
+Dockerfile* text eol=lf
+docker-compose*.yml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.cfg text eol=lf
+*.ini text eol=lf
+*.md text eol=lf
+
+# Jupyter notebooks: JSON, keep as-is
+*.ipynb text eol=lf
+
+# Binary assets (leave untouched)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+
+# Databases / model caches if ever committed
+*.db binary
+*.pkl binary

@@ -5,9 +5,14 @@ services:
     container_name: agentic_mt5_bridge
     restart: unless-stopped
     ports:
-      # The EA and agent run on this machine; do not expose a trade-control
-      # endpoint to the LAN or the public network.
-      - "127.0.0.1:8000:8000"
+      # The MT5 EA runs on the *Windows host* (or another box), while the bridge
+      # runs inside this container. From the EA's point of view the container is
+      # a DIFFERENT machine, so binding only 127.0.0.1 on the host would make the
+      # published port unreachable from the EA. We therefore publish on all
+      # interfaces and rely on the host firewall to restrict access.
+      # SECURITY: restrict access to port 8000 to your LAN/loopback via host
+      # firewall rules (see docs/DOCKER.md). Do not expose to the public internet.
+      - "8000:8000"
     env_file:
       - .env
     environment:
@@ -22,6 +27,15 @@ services:
       - ./config.py:/app/config.py
       - ./main.py:/app/main.py
     command: ["python3", "main.py", "bridge"]
+    healthcheck:
+      # Confirms uvicorn actually bound and the app is answering, so `squad`
+      # (depends_on: service_healthy) does not start trading against a bridge
+      # process that exists but is not yet serving requests.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/mt5/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
 
   # 2. Multi-Asset Specialist Squad Agent (Gold, BTC, ETH)
   squad:
@@ -34,7 +48,8 @@ services:
     # reset the daily baseline and resume trading, defeating both limits.
     restart: "no"
     depends_on:
-      - bridge
+      bridge:
+        condition: service_healthy
     env_file:
       - .env
     environment:

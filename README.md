@@ -101,21 +101,39 @@ python3 -m pytest tests/ -v
 
 ระบบรองรับการรันผ่าน Docker เต็มรูปแบบ โดยมีการผูก Volume เพื่อให้ `journal/`, `artifacts/`, และ `data/` บันทึกอยู่บนเครื่องจริงเสมอ
 
-### 1. รันระบบเชื่อมต่อ MetaTrader 5 ด้วย Docker:
-```bash
-# สั่ง Build และรันทั้ง Bridge Server และ Squad Agent ในพื้นหลัง
-docker compose up -d
+> **หมายเหตุสำคัญ:** โปรเจกต์นี้ใช้ **HTTP bridge architecture** — MetaTrader 5 และ Expert Advisor (`AgenticMT5Bridge.mq5`) ต้องรันบนเครื่อง Windows แยกต่างหาก ส่วน container Docker รันเฉพาะฝั่งสมอง (FastAPI bridge + Python logic)
+>
+> 👉 รายละเอียดการตั้งค่า Network, MT5 WebRequest allowlist, Windows Firewall และการ Troubleshoot ดูที่ [docs/DOCKER.md](docs/DOCKER.md)
 
-# ดูบันทึกการทำงานและ Dashboard แบบ Real-time
+### 1. รันเฉพาะ MT5 Bridge Server (บน Docker):
+Bridge คือ REST endpoint ที่ EA บนเครื่อง Windows จะยิงเข้ามาหา
+```bash
+# สั่ง Build และรัน Bridge ในพื้นหลัง
+docker compose up -d bridge
+
+# ดูบันทึกการทำงาน
+docker compose logs -f bridge
+
+# (ทางเลือก) ตรวจสุขภาพ Bridge ผ่าน healthcheck
+docker compose ps
+```
+> ⚠️ คำเตือน: `docker compose up -d` **ไม่** ได้ start Specialist Squad (ตัวเทรดจริง) — อยู่ใน profile `live` แยกต่างหากเพื่อป้องกัน auto-restart loop ทำลายสถิติการเทรดรายวัน
+
+### 2. รัน Specialist Squad เชื่อมต่อ MT5 (Live Trading):
+```bash
+# ⚠️ อันตราย: ใช้เงินจริง เริ่มออกออเดอร์อัตโนมัติ
+docker compose --profile live up -d squad
+
+# ดูผล Real-time
 docker compose logs -f squad
 ```
 
-### 2. รันโหมด Paper Trading ด้วย Docker (ไม่ต้องเปิด MT5):
+### 3. รันโหมด Paper Trading (จำลอง, ปลอดภัย, ไม่ต้องเปิด MT5):
 ```bash
 docker compose --profile paper run --rm paper
 ```
 
-### 3. หยุดการทำงานของ Docker:
+### 4. หยุดการทำงานของ Docker:
 ```bash
 docker compose down
 ```

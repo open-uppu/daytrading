@@ -394,6 +394,27 @@ class MT5BridgeBroker(BaseBroker):
         # which made the bridge return order A's confirmation for order B.
         self.cmd_namespace = uuid.uuid4().hex[:8]
 
+        # 0.0.0.0 is a *server bind* address, not a valid client target.  The
+        # compose `bridge` service sets MT5_HOST=0.0.0.0 so uvicorn binds all
+        # interfaces, and the `squad` service sets MT5_HOST=bridge so it can
+        # reach it.  If either default leaks through unchanged (bare
+        # `python3 main.py run --mode=mt5` on the Docker host, or a compose
+        # service that forgot to set MT5_HOST), this client would otherwise
+        # try to connect to http://0.0.0.0:8000 and fail confusingly.  Pin the
+        # client default to loopback, which is correct whenever the bridge
+        # process runs on the same host (native Windows or Docker Desktop).
+        if not self.in_process and self.host in ("0.0.0.0", ""):
+            self.host = "127.0.0.1"
+            self.base_url = f"http://{self.host}:{self.port}"
+            logger.info(
+                "[MT5-BROKER] MT5_HOST was %r; treating it as the server bind "
+                "address and connecting via loopback http://127.0.0.1:%s instead. "
+                "If the bridge runs in another container/host, set MT5_HOST to "
+                "its DNS name or LAN IP.",
+                config.mt5_host,
+                self.port,
+            )
+
     def _next_cmd_id(self, kind: str) -> str:
         """Builds a collision-free command id: cmd_<ns>_<kind>_<n>_<ts>."""
         cmd_id = f"cmd_{self.cmd_namespace}_{kind}_{self.cmd_counter}_{int(time.time())}"

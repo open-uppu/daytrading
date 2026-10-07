@@ -26,5 +26,9 @@ RUN mkdir -p /app/journal /app/artifacts /app/data
 # Expose MT5 Bridge Server port
 EXPOSE 8000
 
-# Default command: show help or run squad
-CMD ["python3", "main.py", "--help"]
+# Default to a short, self-limiting paper mode so that `docker run <image>`
+# performs a safe, non-trading demonstration instead of either (a) attempting
+# to place live trades against an unreachable broker, or (b) exiting with only
+# --help output. Production deployments always override this via
+# docker-compose services (bridge / squad / paper) with explicit commands.
+CMD ["python3", "main.py", "run", "--agent=legacy3", "--mode=paper", "--interval=10", "--max-iter=5"]
