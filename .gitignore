@@ -9,3 +9,6 @@ scratch/
 
 # runtime: per-day loss-cutoff baseline written by the live squad
 journal/daily_baseline.json
+
+# runtime: ForexFactory economic-calendar cache written per specialist
+journal/*/ff_calendar_cache.json
