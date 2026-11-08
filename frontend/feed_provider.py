@@ -20,6 +20,8 @@ class DashboardFeedProvider:
             balance = float(self._mt5_state.get("balance", config.initial_balance))
             equity = float(self._mt5_state.get("equity", balance))
             floating = equity - balance
+            currency = self._mt5_state.get("currency", "USD")
+            is_cent = bool(self._mt5_state.get("is_cent", currency == "USC"))
             return {
                 "account_number": self._mt5_state.get("account_number", config.mt5_login),
                 "server": self._mt5_state.get("server", config.mt5_server),
@@ -27,6 +29,8 @@ class DashboardFeedProvider:
                 "equity": round(equity, 2),
                 "floating_pnl": round(floating, 2),
                 "connected": True,
+                "currency": currency,
+                "is_cent": is_cent,
                 "last_sync": self._mt5_state.get("last_sync", datetime.now(timezone.utc).isoformat()),
                 "mode": "MT5 LIVE"
             }
@@ -43,6 +47,8 @@ class DashboardFeedProvider:
             "equity": round(equity, 2),
             "floating_pnl": round(floating, 2),
             "connected": True,
+            "currency": "USD",
+            "is_cent": False,
             "last_sync": datetime.now(timezone.utc).isoformat(),
             "mode": "PAPER SIMULATION"
         }
@@ -50,7 +56,14 @@ class DashboardFeedProvider:
     def get_portfolio_metrics(self) -> Dict[str, Any]:
         """Calculates daily target progress metrics."""
         account = self.get_account_data()
-        start_bal = config.initial_balance
+        if account.get("is_cent") or (account.get("mode") == "MT5 LIVE" and self._mt5_state):
+            # In live mode (including Cent accounts), baseline dynamically tracks session starting balance
+            start_bal = float(self._mt5_state.get("starting_balance", account["balance"]))
+            if "starting_balance" not in self._mt5_state:
+                self._mt5_state["starting_balance"] = start_bal
+        else:
+            start_bal = config.initial_balance
+
         realized = account["balance"] - start_bal
         daily_pct = round((realized / start_bal) * 100.0, 2) if start_bal > 0 else 0.0
         equity_pnl = account["equity"] - start_bal

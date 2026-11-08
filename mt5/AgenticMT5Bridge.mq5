@@ -48,6 +48,69 @@ datetime       g_lastHistorySync  = 0;
 // contract_size) -- so flipping them on later needs no second EA recompile.
 string g_squadSymbols[] = {"XAUUSD", "BTCUSD", "ETHUSD", "XAGUSD", "GBPUSD", "EURUSD", "XPTUSD", "UKOIL", "XNGUSD"};
 
+// Auto-detect broker symbol with suffixes (m, c, .m, .c, pro, etc.)
+string g_resolvedBase[];
+string g_resolvedTarget[];
+
+string ResolveBrokerSymbol(const string baseSym)
+{
+   for(int i = 0; i < ArraySize(g_resolvedBase); i++)
+   {
+      if(g_resolvedBase[i] == baseSym)
+         return g_resolvedTarget[i];
+   }
+
+   // 1. Direct exact match
+   if(SymbolSelect(baseSym, true))
+   {
+      int idx = ArraySize(g_resolvedBase);
+      ArrayResize(g_resolvedBase, idx + 1);
+      ArrayResize(g_resolvedTarget, idx + 1);
+      g_resolvedBase[idx] = baseSym;
+      g_resolvedTarget[idx] = baseSym;
+      return baseSym;
+   }
+
+   // 2. Common broker suffixes
+   string suffixes[] = {"m", "c", ".m", ".c", "pro", ".pro", "_i", "raw", ".raw"};
+   for(int s = 0; s < ArraySize(suffixes); s++)
+   {
+      string candidate = baseSym + suffixes[s];
+      if(SymbolSelect(candidate, true))
+      {
+         int idx = ArraySize(g_resolvedBase);
+         ArrayResize(g_resolvedBase, idx + 1);
+         ArrayResize(g_resolvedTarget, idx + 1);
+         g_resolvedBase[idx] = baseSym;
+         g_resolvedTarget[idx] = candidate;
+         Print("[AgenticMT5] Auto-resolved symbol: ", baseSym, " -> ", candidate);
+         return candidate;
+      }
+   }
+
+   // 3. Scan all symbols available on broker server (selected=false)
+   int total = SymbolsTotal(false);
+   for(int i = 0; i < total; i++)
+   {
+      string name = SymbolName(i, false);
+      if(StringFind(name, baseSym) == 0) // starts with baseSym
+      {
+         if(SymbolSelect(name, true))
+         {
+            int idx = ArraySize(g_resolvedBase);
+            ArrayResize(g_resolvedBase, idx + 1);
+            ArrayResize(g_resolvedTarget, idx + 1);
+            g_resolvedBase[idx] = baseSym;
+            g_resolvedTarget[idx] = name;
+            Print("[AgenticMT5] Auto-resolved symbol from Market Watch: ", baseSym, " -> ", name);
+            return name;
+         }
+      }
+   }
+
+   return baseSym;
+}
+
 // One entry per timeframe-instance this EA suite can manage. Must mirror
 // agents/squad_manager.py's TIMEFRAME_MAGIC table exactly -- an EA build
 // that drifts from the Python table will silently stop reporting positions
@@ -135,16 +198,17 @@ void OnTick()
 //+------------------------------------------------------------------+
 void SendMarketBars(const string symbol, const ENUM_TIMEFRAMES timeframe, const int count)
 {
-   if(!SymbolSelect(symbol, true))
+   string brokerSym = ResolveBrokerSymbol(symbol);
+   if(!SymbolSelect(brokerSym, true))
       return;
 
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
-   int copied = CopyRates(symbol, timeframe, 0, count, rates);
+   int copied = CopyRates(brokerSym, timeframe, 0, count, rates);
    if(copied <= 0)
       return;
 
-   string json = "{\"symbol\":\"" + symbol + "\",\"timeframe\":\"" + TimeframeToStr(timeframe) + "\",\"bars\":[";
+   string json = "{\"symbol\":\"" + symbol + "\",\"broker_symbol\":\"" + brokerSym + "\",\"timeframe\":\"" + TimeframeToStr(timeframe) + "\",\"bars\":[";
    bool first = true;
    // Send oldest to newest so Python's tail(-1) is the current bar.
    for(int i = copied - 1; i >= 0; i--)
@@ -175,7 +239,7 @@ void SendMarketBars(const string symbol, const ENUM_TIMEFRAMES timeframe, const 
       if(TimeCurrent() - lastBarsErr >= 15)
       {
          lastBarsErr = TimeCurrent();
-         Print("[AgenticMT5] Bar upload failed for ", symbol, ". Error: ", GetLastError());
+         Print("[AgenticMT5] Bar upload failed for ", brokerSym, ". Error: ", GetLastError());
       }
    }
 }
@@ -187,10 +251,14 @@ void SendTelemetry()
 {
    double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   string accCurr = AccountInfoString(ACCOUNT_CURRENCY);
+   bool isCent = (accCurr == "USC" || accCurr == "EUrc" || StringFind(AccountInfoString(ACCOUNT_SERVER), "Cent") >= 0);
    
    string json = "{";
    json += "\"account_number\":" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + ",";
    json += "\"server\":\"" + AccountInfoString(ACCOUNT_SERVER) + "\",";
+   json += "\"currency\":\"" + accCurr + "\",";
+   json += "\"is_cent\":" + (isCent ? "true" : "false") + ",";
    json += "\"balance\":" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2) + ",";
    json += "\"equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2) + ",";
    json += "\"symbol\":\"" + Symbol() + "\",";
@@ -379,6 +447,7 @@ void ExecuteCommand(string json)
       // three instruments (XAUUSD/BTCUSD/ETHUSD) from a single EA instance.
       string cmdSymbol = ExtractString(json, "\"symbol\":\"", "\"");
       if(cmdSymbol == "") cmdSymbol = Symbol();
+      string brokerSymbol = ResolveBrokerSymbol(cmdSymbol);
 
       string orderType = ExtractString(json, "\"type\":\"", "\"");
       bool isBuy = (orderType == "BUY");
@@ -395,9 +464,9 @@ void ExecuteCommand(string json)
       }
 
       // Make sure the symbol exists and is subscribed in Market Watch.
-      if(!SymbolSelect(cmdSymbol, true))
+      if(!SymbolSelect(brokerSymbol, true))
       {
-         string msg = "Unknown or unavailable symbol: " + cmdSymbol;
+         string msg = "Unknown or unavailable symbol: " + cmdSymbol + " (broker=" + brokerSymbol + ")";
          Print("[AgenticMT5] Order blocked. ", msg);
          ConfirmExecution(cmdId, "REJECTED", 0, msg);
          return;
@@ -405,8 +474,8 @@ void ExecuteCommand(string json)
 
       // Validate volume and SL/TP sides before sending, so the EA returns a
       // readable rejection instead of a bare broker retcode.
-      double bid = SymbolInfoDouble(cmdSymbol, SYMBOL_BID);
-      double ask = SymbolInfoDouble(cmdSymbol, SYMBOL_ASK);
+      double bid = SymbolInfoDouble(brokerSymbol, SYMBOL_BID);
+      double ask = SymbolInfoDouble(brokerSymbol, SYMBOL_ASK);
 
       if(volume <= 0)
       {
@@ -415,7 +484,7 @@ void ExecuteCommand(string json)
       }
       if(bid <= 0 || ask <= 0)
       {
-         ConfirmExecution(cmdId, "REJECTED", 0, "No price feed for " + cmdSymbol + " (bid/ask unavailable)");
+         ConfirmExecution(cmdId, "REJECTED", 0, "No price feed for " + brokerSymbol + " (bid/ask unavailable)");
          return;
       }
       if(orderType != "BUY" && orderType != "SELL")
@@ -428,9 +497,9 @@ void ExecuteCommand(string json)
          ConfirmExecution(cmdId, "REJECTED", 0, "Both SL and TP are required for agentic orders");
          return;
       }
-      double minVolume = SymbolInfoDouble(cmdSymbol, SYMBOL_VOLUME_MIN);
-      double maxVolume = SymbolInfoDouble(cmdSymbol, SYMBOL_VOLUME_MAX);
-      double volumeStep = SymbolInfoDouble(cmdSymbol, SYMBOL_VOLUME_STEP);
+      double minVolume = SymbolInfoDouble(brokerSymbol, SYMBOL_VOLUME_MIN);
+      double maxVolume = SymbolInfoDouble(brokerSymbol, SYMBOL_VOLUME_MAX);
+      double volumeStep = SymbolInfoDouble(brokerSymbol, SYMBOL_VOLUME_STEP);
       if(volume < minVolume || volume > maxVolume || volumeStep <= 0 ||
          MathAbs(volume / volumeStep - MathRound(volume / volumeStep)) > 0.000001)
       {
@@ -439,8 +508,8 @@ void ExecuteCommand(string json)
                           DoubleToString(minVolume, 2) + ", max=" + DoubleToString(maxVolume, 2) + ")");
          return;
       }
-      double point = SymbolInfoDouble(cmdSymbol, SYMBOL_POINT);
-      double minStopDistance = (double)SymbolInfoInteger(cmdSymbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
+      double point = SymbolInfoDouble(brokerSymbol, SYMBOL_POINT);
+      double minStopDistance = (double)SymbolInfoInteger(brokerSymbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
       if(isBuy && ((sl > 0 && sl > ask - minStopDistance) || (tp > 0 && tp < ask + minStopDistance)))
       {
          ConfirmExecution(cmdId, "REJECTED", 0, "BUY SL/TP violates broker minimum stop distance");
@@ -476,18 +545,18 @@ void ExecuteCommand(string json)
       bool success = false;
       if(isBuy)
       {
-         success = g_trade.Buy(volume, cmdSymbol, 0, sl, tp, "AgenticMT5");
+         success = g_trade.Buy(volume, brokerSymbol, 0, sl, tp, "AgenticMT5");
       }
       else
       {
-         success = g_trade.Sell(volume, cmdSymbol, 0, sl, tp, "AgenticMT5");
+         success = g_trade.Sell(volume, brokerSymbol, 0, sl, tp, "AgenticMT5");
       }
 
       if(success)
       {
          ulong orderTicket = g_trade.ResultOrder();
          Print("[AgenticMT5] Order executed successfully. Ticket: #", orderTicket,
-               " symbol=", cmdSymbol, " volume=", DoubleToString(volume, 2));
+               " symbol=", brokerSymbol, " volume=", DoubleToString(volume, 2));
          ConfirmExecution(cmdId, "SUCCESS", orderTicket, "Executed in MT5");
       }
       else

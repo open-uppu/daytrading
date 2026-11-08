@@ -83,3 +83,64 @@ services:
       - ./artifacts:/app/artifacts
       - ./data:/app/data
     command: ["python3", "main.py", "run", "--agent=all", "--mode=paper", "--interval=10"]
+
+  # 4. Multi-Account: Secondary Account Bridge (e.g. Demo Standard on port 8001)
+  bridge_demo:
+    build: .
+    container_name: agentic_mt5_bridge_demo
+    restart: unless-stopped
+    profiles: ["multi", "demo"]
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    environment:
+      - MT5_HOST=0.0.0.0
+      - MT5_PORT=8000
+    volumes:
+      - ./journal_demo:/app/journal
+      - ./artifacts_demo:/app/artifacts
+      - ./data:/app/data
+      - ./mt5:/app/mt5
+      - ./frontend:/app/frontend
+      - ./config.py:/app/config.py
+      - ./main.py:/app/main.py
+    command: ["python3", "main.py", "bridge"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/mt5/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  # 5. Multi-Account: Secondary Squad Agent (for Demo Standard)
+  squad_demo:
+    build: .
+    container_name: agentic_squad_agent_demo
+    profiles: ["multi", "demo"]
+    restart: "no"
+    depends_on:
+      bridge_demo:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - MT5_HOST=bridge_demo
+      - MT5_PORT=8000
+      - BROKER_MODE=mt5
+    volumes:
+      - ./journal_demo:/app/journal
+      - ./artifacts_demo:/app/artifacts
+      - ./data:/app/data
+      - ./agents:/app/agents
+      - ./core:/app/core
+      - ./mt5:/app/mt5
+      - ./mt4:/app/mt4
+      - ./frontend:/app/frontend
+      - ./risk:/app/risk
+      - ./learning:/app/learning
+      - ./backtest:/app/backtest
+      - ./main.py:/app/main.py
+      - ./test_order.py:/app/test_order.py
+      - ./config.py:/app/config.py
+    command: ["python3", "main.py", "run", "--agent=all9", "--mode=mt5", "--interval=15", "--wait-for-live-data", "--journal-dir=journal_demo/"]

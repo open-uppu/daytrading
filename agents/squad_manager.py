@@ -17,7 +17,7 @@ from rich.live import Live
 from config import config
 from mt4.broker_interface import BaseBroker
 from mt4.paper_broker import PaperTradingBroker
-from mt5.bridge_server import MT5BridgeBroker
+from mt5.bridge_server import MT5BridgeBroker, MarketDataStale
 from mt4.bridge_server import MT4BridgeBroker
 from risk.manager import day_baseline
 from backtest.data_loader import ASSET_SPECS
@@ -150,7 +150,16 @@ class SquadManager:
         # 2. Portfolio-Level Session & 3% Profit Target Tracker
         self.session_date: date = datetime.now(timezone.utc).date()
         self.starting_portfolio_balance: float = self._day_baseline(self.initial_balance)
-        self.fixed_principal_usd: float = fixed_principal_usd if fixed_principal_usd is not None else config.fixed_principal_usd
+        self.is_cent: bool = False
+        if self.broker_mode == "mt5" and isinstance(self.broker, MT5BridgeBroker):
+            live_acc = self.broker.get_account_info()
+            if live_acc.get("is_cent") or live_acc.get("currency") == "USC":
+                self.is_cent = True
+
+        if self.is_cent and fixed_principal_usd is None:
+            self.fixed_principal_usd: float = float(self.initial_balance)
+        else:
+            self.fixed_principal_usd: float = fixed_principal_usd if fixed_principal_usd is not None else config.fixed_principal_usd
         self.target_pct: float = config.daily_target_pct  # 3.0% soft: specialists derisk, portfolio keeps trading
         self.hard_target_pct: float = config.daily_target_hard_pct  # 20.0% hard: locks all trading
         self.recovery_loss_pct: float = config.daily_recovery_loss_pct  # 3.0%: new entries switch to recovery strategy
@@ -201,16 +210,26 @@ class SquadManager:
             )
 
         if self.broker_mode == "mt5" and isinstance(self.broker, MT5BridgeBroker):
-            # Do not let the loop start in a state where the first evaluation
-            # would silently fall back to backtest data or discover a missing
-            # feed only after the live process is already running.
+            # Check market feeds. When a market is closed (e.g. Gold/FX on weekends),
+            # log it and allow active 24/7 markets (e.g. BTC/ETH) to continue trading.
+            available_feeds = 0
             for specialist in self.specialists.values():
                 try:
                     self.broker.get_market_data(specialist.symbol, specialist.timeframe, bars=1)
+                    available_feeds += 1
+                except MarketDataStale as exc:
+                    logger.info(f"[SQUAD] Market closed for {specialist.symbol} ({exc}); standing by.")
                 except RuntimeError as exc:
-                    raise RuntimeError(
-                        f"Live bars unavailable for {specialist.symbol}; refusing to start squad: {exc}"
-                    ) from exc
+                    if "stale" in str(exc).lower() or "closed" in str(exc).lower():
+                        logger.info(f"[SQUAD] Market closed/stale for {specialist.symbol}: {exc}")
+                    else:
+                        raise RuntimeError(
+                            f"Live bars unavailable for {specialist.symbol}; refusing to start squad: {exc}"
+                        ) from exc
+            if available_feeds == 0 and len(self.specialists) > 0:
+                raise RuntimeError(
+                    "All specialist market feeds are unavailable or closed; refusing to start live squad."
+                )
 
         self.iteration_count: int = 0
         self.is_running: bool = False
@@ -548,5 +567,6 @@ class SquadManager:
             age = (datetime.now(timezone.utc) - stamp).total_seconds()
         except (TypeError, ValueError) as exc:
             raise RuntimeError(f"Invalid MT5 telemetry timestamp: {raw!r}") from exc
-        if age < 0 or age > max_age_sec:
+        # Allow up to 15s forward clock skew between distributed nodes (NTP drift over Tailscale/LAN)
+        if age < -15.0 or age > max_age_sec:
             raise RuntimeError(f"MT5 telemetry is stale ({age:.1f}s old; limit {max_age_sec:.0f}s)")

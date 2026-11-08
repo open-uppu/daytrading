@@ -23,6 +23,37 @@ logger = logging.getLogger("mt5_bridge_server")
 
 app = FastAPI(title="MT5 Agentic Bridge API", version="2.0.0")
 
+KNOWN_CANONICAL_SYMBOLS = {
+    "XAUUSD", "BTCUSD", "ETHUSD", "XAGUSD", "GBPUSD", "EURUSD", "XPTUSD", "UKOIL", "XNGUSD"
+}
+
+
+def normalize_symbol(symbol: str) -> str:
+    """Strip common broker suffixes (.m, _i, .c, m, c, pro, raw, etc.) to canonical name."""
+    if not isinstance(symbol, str):
+        return str(symbol)
+    s = symbol.strip().upper()
+    if s in KNOWN_CANONICAL_SYMBOLS:
+        return s
+
+    # Check if symbol starts with any known canonical symbol
+    for canon in sorted(KNOWN_CANONICAL_SYMBOLS, key=len, reverse=True):
+        if s.startswith(canon):
+            suffix = s[len(canon):]
+            if suffix in ("", "M", "C", ".M", ".C", "_I", ".PRO", "PRO", ".RAW", "RAW"):
+                return canon
+
+    # Fallback: strip common punctuation/trailing characters if any
+    for suff in [".M", ".C", "_I", ".PRO", ".RAW", "M", "C"]:
+        if s.endswith(suff) and len(s) > len(suff):
+            return s[:-len(suff)]
+    return s
+
+
+def canonical_symbol_key(symbol: str, timeframe: str) -> str:
+    """Return unified symbol:timeframe key, e.g. XAUUSD:M5."""
+    return f"{normalize_symbol(symbol)}:{timeframe.strip().upper()}"
+
 
 @app.middleware("http")
 async def strip_mql5_json_terminator(request: Request, call_next):
@@ -66,7 +97,9 @@ _mt5_state = {
     "closed_orders": [],
     "recently_closed": [],
     "last_sync": "",
-    "connected": False
+    "connected": False,
+    "currency": "USD",
+    "is_cent": False,
 }
 _pending_commands: List[Dict[str, Any]] = []
 _execution_results: Dict[str, Any] = {}
@@ -94,6 +127,8 @@ class TelemetryPayload(BaseModel):
     ask: float
     open_positions: List[Dict[str, Any]] = []
     closed_orders: List[Dict[str, Any]] = []
+    currency: Optional[str] = "USD"
+    is_cent: Optional[bool] = False
 
 
 class ConfirmPayload(BaseModel):
@@ -159,14 +194,18 @@ def _validate_command(command: Dict[str, Any]) -> Dict[str, Any]:
 async def get_bridge_status():
     """Health check returning MT5 connection and account state."""
     now = monotonic_wall_time()
-    market_data = {
-        key: {
-            "bars": len(value["bars"]),
-            "age_sec": round(max(0.0, now - float(value["received_at"])), 1),
-            "fresh": (now - float(value["received_at"])) <= MARKET_DATA_MAX_AGE_SEC,
-        }
-        for key, value in _cached_bars.items()
-    }
+    market_data = {}
+    for key, value in _cached_bars.items():
+        sym_part = key.split(":")[0] if ":" in key else key
+        canon_sym = normalize_symbol(sym_part)
+        tf_part = key.split(":")[1] if ":" in key else "M5"
+        canon_key = f"{canon_sym}:{tf_part}"
+        if canon_key not in market_data:
+            market_data[canon_key] = {
+                "bars": len(value["bars"]),
+                "age_sec": round(max(0.0, now - float(value["received_at"])), 1),
+                "fresh": (now - float(value["received_at"])) <= MARKET_DATA_MAX_AGE_SEC,
+            }
     return {
         "status": "ONLINE",
         "connected": _mt5_state["connected"],
@@ -174,6 +213,8 @@ async def get_bridge_status():
         "server": _mt5_state["server"],
         "balance": _mt5_state["balance"],
         "equity": _mt5_state["equity"],
+        "currency": _mt5_state.get("currency", "USD"),
+        "is_cent": _mt5_state.get("is_cent", False),
         "last_sync": _mt5_state["last_sync"],
         "market_data": market_data,
     }
@@ -192,6 +233,8 @@ async def receive_telemetry(payload: TelemetryPayload):
     _mt5_state["ask"] = payload.ask
     _mt5_state["open_positions"] = payload.open_positions
     _mt5_state["connected"] = True
+    _mt5_state["currency"] = payload.currency or ("USC" if "cent" in (payload.server or "").lower() else "USD")
+    _mt5_state["is_cent"] = bool(payload.is_cent or _mt5_state["currency"] == "USC")
     # Store an explicit UTC heartbeat.  Local timestamps (e.g. Asia/Bangkok)
     # otherwise look seven hours in the future to the live safety gate.
     _mt5_state["last_sync"] = pd.Timestamp.now(tz="UTC").isoformat()
@@ -275,19 +318,25 @@ async def get_execution_result(command_id: str):
 async def receive_bars(payload: BarsPayload):
     """Called by MT5 to upload latest bars."""
     global _cached_bars
-    key = f"{payload.symbol.upper()}:{payload.timeframe.upper()}"
+    canon_sym = normalize_symbol(payload.symbol)
+    tf = payload.timeframe.upper()
+    canon_key = f"{canon_sym}:{tf}"
+    raw_key = f"{payload.symbol.upper()}:{tf}"
     now = monotonic_wall_time()
-    # A closed market keeps re-uploading the same frozen bars, so upload time
-    # says nothing about freshness; only a changed forming bar does.
+
     last = payload.bars[-1] if payload.bars else None
-    prev = _cached_bars.get(key)
+    prev = _cached_bars.get(canon_key) or _cached_bars.get(raw_key)
     moved = prev is None or not prev["bars"] or last is None or any(
         prev["bars"][-1].get(k) != last.get(k) for k in ("timestamp", "close", "volume"))
-    _cached_bars[key] = {
+    entry = {
         "bars": payload.bars,
         "received_at": now,
         "changed_at": now if moved else prev["changed_at"],
+        "broker_symbol": payload.symbol,
     }
+    _cached_bars[canon_key] = entry
+    if raw_key != canon_key:
+        _cached_bars[raw_key] = entry
 
     # Broadcast bar update to connected WebSocket clients
     try:
@@ -298,25 +347,28 @@ async def receive_bars(payload: BarsPayload):
 
         asyncio.create_task(ws_hub.broadcast({
             "type": "bars",
-            "symbol": payload.symbol.upper(),
-            "timeframe": payload.timeframe.upper(),
+            "symbol": canon_sym,
+            "broker_symbol": payload.symbol.upper(),
+            "timeframe": tf,
             "bars": bars_to_send,
         }))
     except Exception as exc:
         logger.debug(f"[MT5-BARS] Broadcast error: {exc}")
 
-    return {"status": "BARS_STORED", "count": len(payload.bars), "key": key}
+    return {"status": "BARS_STORED", "count": len(payload.bars), "key": canon_key}
 
 
 @app.get("/api/mt5/bars")
 async def get_bars(symbol: str, timeframe: str = "M15"):
     """Serve the latest symbol-scoped bars to an agent in another process."""
-    key = f"{symbol.upper()}:{timeframe.upper()}"
-    cached = _cached_bars.get(key)
+    canon_key = canonical_symbol_key(symbol, timeframe)
+    raw_key = f"{symbol.upper()}:{timeframe.upper()}"
+    cached = _cached_bars.get(canon_key) or _cached_bars.get(raw_key)
     if cached is None:
-        return {"symbol": symbol.upper(), "timeframe": timeframe.upper(), "bars": [], "received_at": None}
+        return {"symbol": normalize_symbol(symbol), "timeframe": timeframe.upper(), "bars": [], "received_at": None}
     return {
-        "symbol": symbol.upper(),
+        "symbol": normalize_symbol(symbol),
+        "broker_symbol": cached.get("broker_symbol", symbol),
         "timeframe": timeframe.upper(),
         "bars": cached["bars"],
         "received_at": cached["received_at"],
@@ -522,11 +574,82 @@ class MT5BridgeBroker(BaseBroker):
             "open_positions_count": len(_mt5_state["open_positions"])
         }
 
+    def _detect_broker_suffix(self) -> str:
+        """Detect active broker symbol suffix (e.g. 'm', 'c') from MT5 telemetry symbol."""
+        if hasattr(self, "_broker_suffix"):
+            return self._broker_suffix
+        self._broker_suffix = ""
+        try:
+            telemetry_sym = ""
+            if self.in_process:
+                telemetry_sym = _mt5_state.get("symbol", "")
+            else:
+                resp = httpx.get(f"{self.base_url}/api/mt5/account", timeout=2.0)
+                if resp.status_code == 200:
+                    telemetry_sym = resp.json().get("symbol", "")
+            if telemetry_sym:
+                norm = normalize_symbol(telemetry_sym)
+                if telemetry_sym.upper().startswith(norm.upper()) and len(telemetry_sym) > len(norm):
+                    self._broker_suffix = telemetry_sym[len(norm):]
+        except Exception:
+            pass
+        return self._broker_suffix
+
+    def _resolve_broker_symbol(self, symbol: str) -> str:
+        """Resolve canonical symbol (e.g. XAUUSD) to active broker symbol (e.g. XAUUSDm)."""
+        if not hasattr(self, "_broker_symbol_cache"):
+            self._broker_symbol_cache = {}
+        if symbol in self._broker_symbol_cache:
+            return self._broker_symbol_cache[symbol]
+
+        suffix = self._detect_broker_suffix()
+        norm = normalize_symbol(symbol)
+        if suffix and not symbol.endswith(suffix):
+            resolved = f"{norm}{suffix}"
+            self._broker_symbol_cache[symbol] = resolved
+            return resolved
+
+        norm_target = norm.upper()
+        # 1. In-process: check cached bars or telemetry
+        if self.in_process:
+            for k, entry in _cached_bars.items():
+                broker_sym = entry.get("broker_symbol")
+                if broker_sym and normalize_symbol(broker_sym).upper() == norm_target:
+                    self._broker_symbol_cache[symbol] = broker_sym
+                    return broker_sym
+                cand = k.split(":")[0]
+                if normalize_symbol(cand).upper() == norm_target:
+                    self._broker_symbol_cache[symbol] = cand
+                    return cand
+            telemetry_sym = _mt5_state.get("symbol")
+            if telemetry_sym and normalize_symbol(telemetry_sym).upper() == norm_target:
+                self._broker_symbol_cache[symbol] = telemetry_sym
+                return telemetry_sym
+
+        # 2. Over REST: check /api/mt5/status
+        if not self.in_process:
+            try:
+                resp = httpx.get(f"{self.base_url}/api/mt5/status", timeout=2.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for k in data.get("market_data", {}).keys():
+                        cand = k.split(":")[0]
+                        if normalize_symbol(cand).upper() == norm_target:
+                            self._broker_symbol_cache[symbol] = cand
+                            return cand
+            except Exception:
+                pass
+
+        return symbol
+
     def get_market_data(self, symbol: str = "XAUUSD", timeframe: str = "M5", bars: int = 100) -> pd.DataFrame:
         """Return fresh MT5 bars; never substitute backtest data in live mode."""
-        key = f"{symbol.upper()}:{timeframe.upper()}"
+        key = canonical_symbol_key(symbol, timeframe)
+        raw_key = f"{symbol.upper()}:{timeframe.upper()}"
+        broker_sym = self._resolve_broker_symbol(symbol)
+        broker_raw_key = f"{broker_sym.upper()}:{timeframe.upper()}"
         if self.in_process:
-            cached = _cached_bars.get(key)
+            cached = _cached_bars.get(key) or _cached_bars.get(raw_key) or _cached_bars.get(broker_raw_key)
         else:
             try:
                 response = httpx.get(
@@ -534,9 +657,20 @@ class MT5BridgeBroker(BaseBroker):
                     params={"symbol": symbol, "timeframe": timeframe},
                     timeout=3.0,
                 )
-                if response.status_code != 200:
-                    raise RuntimeError(f"HTTP {response.status_code}")
-                payload = response.json()
+                payload = response.json() if response.status_code == 200 else {}
+                bars_list = payload.get("bars", [])
+
+                if not bars_list and broker_sym != symbol:
+                    response2 = httpx.get(
+                        f"{self.base_url}/api/mt5/bars",
+                        params={"symbol": broker_sym, "timeframe": timeframe},
+                        timeout=3.0,
+                    )
+                    if response2.status_code == 200:
+                        payload2 = response2.json()
+                        if payload2.get("bars"):
+                            payload = payload2
+
                 cached = {
                     "bars": payload.get("bars", []),
                     "received_at": payload.get("received_at"),
@@ -585,11 +719,12 @@ class MT5BridgeBroker(BaseBroker):
         so callers get a real fill status instead of a bare "QUEUED".
         """
         cmd_id = self._next_cmd_id("mt5")
+        broker_sym = self._resolve_broker_symbol(symbol)
 
         command = {
             "id": cmd_id,
             "action": "ORDER_OPEN",
-            "symbol": symbol,
+            "symbol": broker_sym,
             "type": order_type,
             "volume": lots,
             "sl": sl,

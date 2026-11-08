@@ -179,3 +179,29 @@ python3 main.py backtest --market=all --timeframe=M15
 4. **ML Confidence Gate**: กรองสัญญาณด้วยโมเดล ML Confidence $\ge 0.75$
 5. **Squad Risk Lock**: ล็อคกำไรเมื่อถึง +3% ต่อวัน และตัดขาดทุนเมื่อถึง -2% ต่อวัน
 
+---
+
+## 8. ระบบตรวจจับนามสกุลโบรกเกอร์, บัญชี Cent, และ 1-Click Docker Compose
+
+### 1. Smart Broker Suffix & Case Auto-Detection
+* **ปัญหาเดิม:** โบรกเกอร์แต่ละแห่งมีรูปแบบชื่อคู่เงินต่างกัน เช่น Exness Standard ใช้ตัวพิมพ์เล็ก `m` (`BTCUSDm`, `ETHUSDm`), Exness Cent ใช้ `c` (`BTCUSDc`), Raw/Pro ใช้ `.raw` หรือไม่มีนามสกุล
+* **โซลูชัน 100% Turnkey:**
+  - `mt5/bridge_server.py`: มีฟังก์ชัน `normalize_symbol()` และ `canonical_symbol_key()` ที่บันทึกแท่งเทียนทั้งแบบ Canonical Key (`BTCUSD:M5`) และ Broker Key (`BTCUSDm:M5`)
+  - `MT5BridgeBroker._detect_broker_suffix()`: ดึงข้อมูลชื่อคู่เงินจริงจาก MT5 Telemetry และแมปชื่อคู่เงินพร้อมตัวพิมพ์ตรงเป๊ะอัตโนมัติ ไม่ต้องแก้ชื่อในโค้ด Python
+  - `MT5BridgeBroker.open_order()`: แปลงชื่อคู่เงินเป้าหมายเป็นชื่อโบรกเกอร์ก่อนส่งเข้า MT5 เสมอ ป้องกันข้อผิดพลาด `Unknown or unavailable symbol`
+
+### 2. บัญชี Cent (USC) และ Dynamic +3% Scaling
+* **Exness Standard Cent (USC):**
+  - เงินทุน 2,000 บาท แลกเปลี่ยนเป็นประมาณ $57 USD = **5,700 USC**
+  - ตัวแปร `is_cent = True` เมื่อ `currency == "USC"`
+  - ล็อคเป้าหมายกำไรรายวัน +3% ที่ **+171 USC (~$1.71 USD หรือประมาณ 60 บาทต่อวัน)** สอดคล้องกับงบประมาณและเป้าหมายโดยตรง
+
+### 3. Distributed NTP Clock Skew Tolerance & Weekend Standby
+* **Clock Skew Tolerance:** อนุญาตให้เกิด NTP Drift ล่วงหน้าได้ถึง 15 วินาที ระหว่างเครื่อง Windows Host และเครื่องคอนเทนเนอร์/Mac ผ่าน Tailscale
+* **Weekend Graceful Standby:** ตรวจจับสถานะวันหยุดของตลาดทองคำและ Forex (เสาร์-อาทิตย์) โดยไม่ล่มทั้งระบบ อนุญาตให้ Crypto (BTC/ETH) ซื้อขายต่อเนื่องได้ 24/7
+
+### 4. สคริปต์ 1-Click Deployment
+* **Windows Laptop (`deploy_laptop.bat`):** ดับเบิ้ลคลิกครั้งเดียว ทำการปิดคอนเทนเนอร์เก่า, ดึงอัปเดตล่าสุดจาก Git, รัน `docker compose --profile live up -d --build`, และตรวจเช็คสถานะ MT5 Bridge อัตโนมัติ 100%
+* **Mac/Unix (`deploy_mac.sh`):** รันการทดสอบ 201 เทสต์ก่อนติดตั้ง และเปิดระบบในโหมด Live
+* **Full Stack (`deploy_all_laptop.bat`):** รันอัปเดตทั้ง Trader Central Hub และ Daytrad ในคลิกเดียว
+
