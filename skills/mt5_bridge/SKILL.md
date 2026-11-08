@@ -12,7 +12,7 @@ This skill defines how the agent communicates with MetaTrader 5 (MT5) for live E
 
 - **Broker**: Exness
 - **Server**: `Exness-MT5Trial14`
-- **Account Number**: `416387559`
+- **Account Number**: `416568420`
 - **Bridge Endpoint**: `http://127.0.0.1:8000`
 
 ## Architecture & REST Protocol
@@ -21,7 +21,7 @@ This skill defines how the agent communicates with MetaTrader 5 (MT5) for live E
    MT5 transmits live account equity, balance, bid, ask, and active positions:
    ```json
    {
-     "account_number": 416387559,
+     "account_number": 416568420,
      "server": "Exness-MT5Trial14",
      "balance": 10000.0,
      "equity": 10000.0,

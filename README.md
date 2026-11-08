@@ -76,7 +76,7 @@ python3 -m pytest tests/ -v
 
 บัญชี Exness ที่ตั้งค่าไว้ในระบบ:
 - **Server**: `Exness-MT5Trial14`
-- **Account (Login)**: `416387559`
+- **Account (Login)**: `416568420`
 - **Password**: ถูกตั้งค่าไว้ในไฟล์ `.env` แล้ว
 
 ### ขั้นตอนการเชื่อมต่อ:
