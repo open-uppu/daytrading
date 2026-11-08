@@ -164,7 +164,7 @@ def cmd_loop(args):
         f"[bold cyan]Agentic Multi-Asset Specialist Squad[/bold cyan]\n"
         f"Active Specialists: [bold yellow]{', '.join([a.upper() for a in selected_agents])}[/bold yellow]\n"
         f"Timeframe: [bold]{effective_timeframe}[/bold] | Journal: [bold]{journal_dir}[/bold]\n"
-        f"Daily Profit Target: [bold green]+3.0%[/bold green] (Lock on achievement) | Loss Cutoff: [bold red]-2.0%[/bold red]\n"
+        f"Daily Profit Target: [bold green]+3.0%[/bold green] (Lock on achievement) | Loss Cutoff: [bold red]-5.0%[/bold red]\n"
         f"Broker Mode: [bold]{args.mode}[/bold]{' (live bridge prices, persisted state)' if live_paper else ''} | Interval: [bold]{args.interval}s[/bold]",
         expand=False
     ))
