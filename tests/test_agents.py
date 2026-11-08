@@ -316,7 +316,7 @@ def test_live_squad_uses_terminal_balance_not_cli_default(monkeypatch):
     """A live risk limit must be based on the actual account, not $10k."""
     class LiveBroker(PaperTradingBroker):
         def get_account_info(self):
-            return {"balance": 500.0, "equity": 480.0}  # -6.67% equity against the fixed $300 principal, past the 5% max loss cutoff
+            return {"balance": 500.0, "equity": 470.0}  # -6% equity against the real $500 day-start balance, past the 5% max loss cutoff
 
     squad = SquadManager(
         broker=LiveBroker(initial_balance=10_000.0),
@@ -327,7 +327,7 @@ def test_live_squad_uses_terminal_balance_not_cli_default(monkeypatch):
 
     status = squad.get_portfolio_daily_pnl()
     assert status["starting_balance"] == 500.0
-    assert status["target_profit_usd"] == 9.0
+    assert status["target_profit_usd"] == 15.0  # 3% of the real $500, not the $300 principal
     assert status["max_loss_reached"] is True
 
 
@@ -348,7 +348,7 @@ def test_portfolio_loss_cutoff_closes_floating_loss_positions():
         sl=broker.current_price - 10.0, tp=broker.current_price + 30.0, comment="cutoff-test",
     )
     current = broker.current_price
-    broker.simulate_price_update(current - 3.0, current - 3.0, current - 3.0)
+    broker.simulate_price_update(current - 6.0, current - 6.0, current - 6.0)  # -$600 floating = -6% of $10k
     squad = SquadManager(
         broker=broker, broker_mode="paper", initial_balance=10_000.0,
         agents_to_enable=[],
@@ -356,7 +356,6 @@ def test_portfolio_loss_cutoff_closes_floating_loss_positions():
     # Preserve the pre-existing position while making the session reference
     # balance explicit for this deterministic test.
     squad.starting_portfolio_balance = 10_000.0
-    squad.fixed_principal_usd = 5_000.0
     result = squad.step()
     assert result["status"] == "PORTFOLIO_MAX_LOSS_CUTOFF"
     assert opened["ticket"] not in [p["ticket"] for p in broker.get_open_positions()]
@@ -372,13 +371,12 @@ def test_run_loop_pauses_on_max_loss_cutoff_instead_of_exiting():
         sl=broker.current_price - 10.0, tp=broker.current_price + 30.0, comment="cutoff-test",
     )
     current = broker.current_price
-    broker.simulate_price_update(current - 3.0, current - 3.0, current - 3.0)
+    broker.simulate_price_update(current - 6.0, current - 6.0, current - 6.0)  # -$600 floating = -6% of $10k
     squad = SquadManager(
         broker=broker, broker_mode="paper", initial_balance=10_000.0,
         agents_to_enable=[],
     )
     squad.starting_portfolio_balance = 10_000.0
-    squad.fixed_principal_usd = 5_000.0
 
     squad.run_loop(max_iterations=3, interval_sec=0)
 
@@ -410,26 +408,24 @@ def test_symbol_positions_filtered_by_own_magic(tmp_path):
     assert result_m15["position"]["ticket"] == res_m15["ticket"]
 
 
-def test_fixed_principal_usd_denominator_overridable(tmp_path):
-    """Percentages must compute against fixed_principal_usd, not
-    starting_portfolio_balance, even when the two differ (e.g. account
-    already grew from a prior day's profit)."""
+def test_daily_pct_uses_day_start_balance(tmp_path):
+    """Percentages must compute against the real balance the day started with,
+    not a fixed reference capital (e.g. account already grew from a prior day)."""
     broker = PaperTradingBroker(initial_balance=10000.0)
     squad = SquadManager(
         broker=broker, broker_mode="mt5", initial_balance=10000.0,
-        fixed_principal_usd=300.0, journal_dir=tmp_path,
+        journal_dir=tmp_path,
     )
-    # Simulate a prior day's profit already baked into starting_portfolio_balance,
-    # decoupled from fixed_principal_usd.
+    # Simulate a prior day's profit already baked into starting_portfolio_balance.
     squad.starting_portfolio_balance = 309.0
     broker.balance = 315.0
     broker.equity = 315.0
 
     p_stat = squad.get_portfolio_daily_pnl()
-    # Numerator: today's real dollar move (315 - 309 = 6), unaffected by this change.
+    # Numerator: today's real dollar move (315 - 309 = 6).
     assert p_stat["realized_pnl_usd"] == pytest.approx(6.0)
-    # Denominator: fixed_principal_usd (300), NOT starting_portfolio_balance (309).
-    assert p_stat["daily_return_pct"] == pytest.approx(2.0)  # 6 / 300 * 100
+    # Denominator: starting_portfolio_balance (309).
+    assert p_stat["daily_return_pct"] == pytest.approx(6.0 / 309.0 * 100.0, abs=0.01)
 
 
 def test_recovery_reached_only_in_band(tmp_path):

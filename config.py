@@ -15,11 +15,11 @@ class TradingConfig(BaseSettings):
     
     # Financial & Risk Parameters
     initial_balance: float = 10000.0
-    fixed_principal_usd: float = 300.0  # ~10,000 THB; the user's fixed reference capital for ALL daily % calculations (soft/hard target, recovery, max loss) -- deliberately independent of the live/compounding account balance
+    fixed_principal_usd: float = 300.0  # UNUSED by daily % math since the switch to the real day-start balance (see SquadManager._daily_base_usd); kept only for constructor/back-compat
     daily_target_pct: float = 0.03   # 3% soft target/day: risk per trade is halved past this
     daily_target_hard_pct: float = 0.20  # 20% hard target/day: trading locks entirely past this
     daily_target_derisk_factor: float = 0.5  # risk-per-trade multiplier between soft and hard target
-    daily_max_loss_pct: float = 0.05 # 5% hard-stop max daily loss cutoff (close everything, halt for the day) -- against fixed_principal_usd, not the live balance
+    daily_max_loss_pct: float = 0.05 # 5% hard-stop max daily loss cutoff (close everything, halt for the day) -- against the real balance the day started with
     daily_recovery_loss_pct: float = 0.03  # 3%: new entries switch to each specialist's designated recovery strategy (only XAG has one); open positions untouched
     risk_per_trade_pct: float = 0.005  # 0.5% per trade for high-frequency scalping
     min_rr_ratio: float = 1.3        # Minimum 1:1.3 Risk-to-Reward ratio

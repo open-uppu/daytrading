@@ -165,8 +165,8 @@ def test_squad_manages_open_positions_when_risk_budget_exhausted():
     order = broker.open_order(
         symbol="BTCUSD",
         order_type="BUY",
-        lots=0.1,
-        sl=79700.0,  # 300 distance * 0.1 lots = $30 risk (exceeds 2% of $1000 = $20)
+        lots=0.2,
+        sl=79700.0,  # 300 distance * 0.2 lots = $60 risk (exceeds 5% of $1000 = $50)
         tp=80500.0
     )
     assert order["ticket"] is not None
@@ -178,8 +178,8 @@ def test_squad_manages_open_positions_when_risk_budget_exhausted():
         agents_to_enable=["btc"]
     )
     
-    # Portfolio open risk ($30) > 2% max daily loss ($20)
-    assert squad._portfolio_open_risk_usd() >= squad.fixed_principal_usd * squad.max_loss_pct
+    # Portfolio open risk ($60) > 5% max daily loss of the $1000 day-start balance ($50)
+    assert squad._portfolio_open_risk_usd() >= squad._daily_base_usd() * squad.max_loss_pct
 
     # Step squad: should NOT crash and should return MONITORING_POSITION for btc
     step_result = squad.step()

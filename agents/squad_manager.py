@@ -165,10 +165,10 @@ class SquadManager:
         self.hard_target_pct: float = config.daily_target_hard_pct  # 20.0% hard: locks all trading
         self.recovery_loss_pct: float = config.daily_recovery_loss_pct  # 3.0%: new entries switch to recovery strategy
         self.max_loss_pct: float = config.daily_max_loss_pct  # -5.0%: hard stop
-        self.target_profit_usd: float = self.fixed_principal_usd * self.target_pct
-        self.hard_target_profit_usd: float = self.fixed_principal_usd * self.hard_target_pct
-        self.recovery_loss_usd: float = self.fixed_principal_usd * self.recovery_loss_pct
-        self.max_loss_usd: float = self.fixed_principal_usd * self.max_loss_pct
+        self.target_profit_usd: float = self._daily_base_usd() * self.target_pct
+        self.hard_target_profit_usd: float = self._daily_base_usd() * self.hard_target_pct
+        self.recovery_loss_usd: float = self._daily_base_usd() * self.recovery_loss_pct
+        self.max_loss_usd: float = self._daily_base_usd() * self.max_loss_pct
 
         # 3. Instantiate Specialist Agents
         self.specialists: Dict[str, BaseSpecialistAgent] = {}
@@ -243,6 +243,10 @@ class SquadManager:
             return self.broker.day_baseline(balance)
         return balance
 
+    def _daily_base_usd(self) -> float:
+        """Denominator for every daily % rule (target, recovery, max loss): the real balance the day started with."""
+        return self.starting_portfolio_balance if self.starting_portfolio_balance > 0 else self.initial_balance
+
     def check_new_session(self) -> None:
         """Resets daily portfolio tracker on new UTC date."""
         today = datetime.now(timezone.utc).date()
@@ -251,10 +255,10 @@ class SquadManager:
             self.session_date = today
             acc = self.broker.get_account_info()
             self.starting_portfolio_balance = self._day_baseline(acc["balance"])
-            self.target_profit_usd = self.fixed_principal_usd * self.target_pct
-            self.hard_target_profit_usd = self.fixed_principal_usd * self.hard_target_pct
-            self.recovery_loss_usd = self.fixed_principal_usd * self.recovery_loss_pct
-            self.max_loss_usd = self.fixed_principal_usd * self.max_loss_pct
+            self.target_profit_usd = self._daily_base_usd() * self.target_pct
+            self.hard_target_profit_usd = self._daily_base_usd() * self.hard_target_pct
+            self.recovery_loss_usd = self._daily_base_usd() * self.recovery_loss_pct
+            self.max_loss_usd = self._daily_base_usd() * self.max_loss_pct
 
     def get_portfolio_daily_pnl(self) -> Dict[str, Any]:
         """Calculates aggregated realized and unrealized PnL across all specialist agents."""
@@ -283,8 +287,9 @@ class SquadManager:
         # otherwise an open position can exceed the cutoff before it closes.
         equity_pnl = current_equity - self.starting_portfolio_balance
 
-        daily_return_pct = round((total_realized_pnl / self.fixed_principal_usd) * 100.0, 2) if self.fixed_principal_usd > 0 else 0.0
-        equity_return_pct = round((equity_pnl / self.fixed_principal_usd) * 100.0, 2) if self.fixed_principal_usd > 0 else 0.0
+        daily_base = self._daily_base_usd()
+        daily_return_pct = round((total_realized_pnl / daily_base) * 100.0, 2)
+        equity_return_pct = round((equity_pnl / daily_base) * 100.0, 2)
 
         target_reached = daily_return_pct >= (self.target_pct * 100.0)
         hard_target_reached = daily_return_pct >= (self.hard_target_pct * 100.0)
@@ -371,7 +376,7 @@ class SquadManager:
                 f"switching new entries to their recovery strategy. Open positions unaffected."
             )
 
-        portfolio_risk_reached = self._portfolio_open_risk_usd() >= (self.fixed_principal_usd * self.max_loss_pct)
+        portfolio_risk_reached = self._portfolio_open_risk_usd() >= (self._daily_base_usd() * self.max_loss_pct)
         agent_results = {}
         for key, agent in self.specialists.items():
             try:
@@ -443,7 +448,7 @@ class SquadManager:
             except (KeyError, TypeError, ValueError):
                 # Unknown risk is unsafe: count it as the entire remaining
                 # budget so another order cannot be opened beside it.
-                return self.fixed_principal_usd * self.max_loss_pct
+                return self._daily_base_usd() * self.max_loss_pct
             total += distance * lots * contract_sizes.get(symbol, 1.0)
         return total
 
