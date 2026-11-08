@@ -4,6 +4,7 @@ Orchestrates Specialist Agents (GoldSpecialistAgent, BtcSpecialistAgent, EthSpec
 and the SquadManager with Portfolio 3% Daily Profit Protection.
 """
 
+import os
 import sys
 import argparse
 import logging
@@ -19,6 +20,7 @@ from agents.gold_agent import GoldSpecialistAgent
 from agents.btc_agent import BtcSpecialistAgent
 from agents.eth_agent import EthSpecialistAgent
 from mt4.paper_broker import PaperTradingBroker
+from mt4.live_paper_broker import LiveFeedPaperBroker
 from core.chart_generator import generate_candlestick_chart
 from core.vision_analyzer import VisionAnalyzer
 from core.confluence import ConfluenceEngine
@@ -153,13 +155,17 @@ def cmd_loop(args):
     selected_agents = agents_map.get(args.agent.lower(), ["all"])
     effective_timeframe = getattr(args, "timeframe", config.timeframe_main)
     journal_dir = Path(args.journal_dir) if getattr(args, "journal_dir", None) else _default_journal_dir(effective_timeframe)
+    live_paper = args.mode == "paper" and getattr(args, "paper_feed", "synthetic") == "bridge"
+    if live_paper and not getattr(args, "journal_dir", None):
+        # Keep simulated trades out of the live squad's journals / daily trade state.
+        journal_dir = journal_dir / "paper_live"
 
     console.print(Panel(
         f"[bold cyan]Agentic Multi-Asset Specialist Squad[/bold cyan]\n"
         f"Active Specialists: [bold yellow]{', '.join([a.upper() for a in selected_agents])}[/bold yellow]\n"
         f"Timeframe: [bold]{effective_timeframe}[/bold] | Journal: [bold]{journal_dir}[/bold]\n"
         f"Daily Profit Target: [bold green]+3.0%[/bold green] (Lock on achievement) | Loss Cutoff: [bold red]-2.0%[/bold red]\n"
-        f"Broker Mode: [bold]{args.mode}[/bold] | Interval: [bold]{args.interval}s[/bold]",
+        f"Broker Mode: [bold]{args.mode}[/bold]{' (live bridge prices, persisted state)' if live_paper else ''} | Interval: [bold]{args.interval}s[/bold]",
         expand=False
     ))
     
@@ -168,16 +174,22 @@ def cmd_loop(args):
     # but it must never fill that gap with historical CSV data.
     while True:
         try:
+            paper_broker = None
+            initial_balance = args.balance
+            if live_paper:
+                paper_broker = LiveFeedPaperBroker(state_path=journal_dir / "paper_state.json")
+                initial_balance = paper_broker.balance
             squad = SquadManager(
+                broker=paper_broker,
                 broker_mode=args.mode,
-                initial_balance=args.balance,
+                initial_balance=initial_balance,
                 agents_to_enable=selected_agents,
                 timeframe=effective_timeframe,
                 journal_dir=journal_dir
             )
             break
         except RuntimeError as exc:
-            if args.mode == "mt5" and args.wait_for_live_data:
+            if (args.mode == "mt5" or live_paper) and args.wait_for_live_data:
                 console.print(
                     f"[yellow]Live preflight not ready: {exc}[/yellow]\n"
                     f"[dim]Waiting {args.interval}s for fresh MT5 telemetry and bars...[/dim]"
@@ -339,6 +351,11 @@ def build_parser() -> argparse.ArgumentParser:
         )
         loop_parser.add_argument("--mode", default="mt5", choices=["mt5", "paper", "mt4"], help="Broker execution mode")
         loop_parser.add_argument("--balance", type=float, default=10000.0, help="Initial account balance")
+        loop_parser.add_argument(
+            "--paper-feed", default=os.environ.get("PAPER_FEED", "synthetic"), choices=["synthetic", "bridge"],
+            help="Paper mode only: 'bridge' trades simulated orders on LIVE bridge prices and persists "
+                 "balance/positions to <journal>/paper_live/paper_state.json; 'synthetic' keeps the old random data"
+        )
         loop_parser.add_argument("--interval", type=int, default=5, help="Loop interval in seconds")
         loop_parser.add_argument("--timeframe", default=config.timeframe_main,
                                   choices=["M1", "M5", "M15", "M30", "H1", "H4", "D1"],

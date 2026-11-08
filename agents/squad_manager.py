@@ -16,6 +16,7 @@ from rich.live import Live
 
 from config import config
 from mt4.broker_interface import BaseBroker
+from mt4.live_paper_broker import LiveFeedPaperBroker
 from mt4.paper_broker import PaperTradingBroker
 from mt5.bridge_server import MT5BridgeBroker, MarketDataStale
 from mt4.bridge_server import MT4BridgeBroker
@@ -238,6 +239,8 @@ class SquadManager:
         """Live bridge only: persist the day's first balance so restarting the squad can't reset the loss cutoff."""
         if isinstance(self.broker, MT5BridgeBroker) and not self.broker.in_process:
             return day_baseline(config.journal_dir / "daily_baseline.json", balance)
+        if isinstance(self.broker, LiveFeedPaperBroker):
+            return self.broker.day_baseline(balance)
         return balance
 
     def check_new_session(self) -> None:
@@ -272,7 +275,7 @@ class SquadManager:
         # trackers reset with the process and may miss manual/broker-side exits.
         # Preserve tracker data for paper tests, but use terminal balance and
         # equity for live target and loss decisions.
-        if self.broker_mode == "mt5":
+        if self.broker_mode == "mt5" or isinstance(self.broker, LiveFeedPaperBroker):
             total_realized_pnl = current_balance - self.starting_portfolio_balance
         else:
             total_realized_pnl = tracker_realized_pnl

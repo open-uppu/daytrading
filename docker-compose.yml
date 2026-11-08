@@ -78,11 +78,21 @@ services:
     build: .
     container_name: agentic_paper_squad
     profiles: ["paper"]
+    # Simulated orders on LIVE prices read from the bridge (no order ever reaches
+    # the real account).  Balance/positions persist to
+    # journal/paper_live/paper_state.json, so rebuilds/restarts keep the account.
+    # Delete that file to start a fresh paper account.
+    depends_on:
+      bridge:
+        condition: service_healthy
+    environment:
+      - MT5_HOST=bridge
+      - MT5_PORT=8000
     volumes:
       - ./journal:/app/journal
       - ./artifacts:/app/artifacts
       - ./data:/app/data
-    command: ["python3", "main.py", "run", "--agent=all", "--mode=paper", "--interval=10"]
+    command: ["python3", "main.py", "run", "--agent=all", "--mode=paper", "--paper-feed=bridge", "--interval=10", "--wait-for-live-data"]
 
   # 4. Multi-Account: Secondary Account Bridge (e.g. Demo Standard on port 8001)
   bridge_demo:
