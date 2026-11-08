@@ -40,23 +40,36 @@ SUPPORTED_SYMBOLS = ["XAUUSD", "BTCUSD", "ETHUSD", "XAGUSD", "GBPUSD", "EURUSD",
 
 
 def init_mt5() -> bool:
-    """Connects to MetaTrader 5 terminal."""
+    """Connects to MetaTrader 5 terminal and enables all 9 specialist markets."""
     logger.info(f"Connecting to MT5 (Login: {LOGIN}, Server: {SERVER})...")
-    # Try with explicit credentials first
+    connected = False
+
+    # 1. Try with explicit credentials first
     if mt5.initialize(login=LOGIN, server=SERVER, password=PASSWORD):
         logger.info("[SUCCESS] Connected to MT5 with account credentials!")
-        return True
-
-    # Fallback to already running terminal session
-    logger.info("Credentials init failed, attempting to connect to active running MT5 session...")
-    if mt5.initialize():
+        connected = True
+    elif mt5.initialize():
         logger.info("[SUCCESS] Connected to active MT5 terminal session!")
-        return True
+        connected = True
 
-    err = mt5.last_error()
-    logger.error(f"[FAILED] Could not connect to MT5 terminal: {err}")
-    logger.error("Please ensure MetaTrader 5 is launched and logged in on this Windows machine.")
-    return False
+    if not connected:
+        err = mt5.last_error()
+        logger.error(f"[FAILED] Could not connect to MT5 terminal: {err}")
+        logger.error("Please ensure MetaTrader 5 is launched and logged in on this Windows machine.")
+        return False
+
+    # 2. Automatically enable all 9 specialist symbols in Market Watch
+    logger.info("Initializing 9 Specialist Markets in MT5 Market Watch...")
+    enabled_count = 0
+    for sym in SUPPORTED_SYMBOLS:
+        if mt5.symbol_select(sym, True):
+            enabled_count += 1
+            logger.info(f" • [ACTIVE] {sym:8s} enabled in Market Watch")
+        else:
+            logger.warning(f" • [WARN]   {sym:8s} not found in broker symbol list")
+
+    logger.info(f"Successfully activated {enabled_count}/{len(SUPPORTED_SYMBOLS)} symbols in MT5!")
+    return True
 
 
 def get_account_payload() -> dict:
@@ -181,9 +194,10 @@ def execute_order(cmd: dict) -> dict:
 
 
 def sync_loop():
-    """Main continuous synchronization loop."""
-    logger.info("Starting MT5 Direct Native Telemetry & Order Sync Loop...")
+    """Main continuous synchronization loop covering all 9 specialist markets."""
+    logger.info("Starting MT5 Direct Native Telemetry & Order Sync Loop for 9 Markets...")
     session = requests.Session()
+    last_bars_upload = 0.0
 
     while True:
         try:
@@ -194,15 +208,15 @@ def sync_loop():
                 time.sleep(2)
                 continue
 
+            # 2. Fetch open positions across ALL 9 symbols at once
             open_positions = get_open_positions()
 
-            # 2. Fetch primary tick (XAUUSD)
-            mt5.symbol_select("XAUUSD", True)
+            # 3. Fetch primary tick for XAUUSD
             tick = mt5.symbol_info_tick("XAUUSD")
             bid = tick.bid if tick else 2650.0
             ask = tick.ask if tick else 2650.25
 
-            # 3. Send Telemetry to Bridge
+            # 4. Send Telemetry to Bridge
             telemetry = {
                 "account_number": acc_data["account_number"],
                 "server": acc_data["server"],
@@ -222,7 +236,33 @@ def sync_loop():
             except Exception as e:
                 logger.warning(f"Bridge connection waiting at {BRIDGE_URL}: {e}")
 
-            # 4. Poll and execute pending trade commands
+            # 5. Periodically upload M5 bars for all 9 markets
+            if time.time() - last_bars_upload > 10.0:
+                last_bars_upload = time.time()
+                for sym in SUPPORTED_SYMBOLS:
+                    try:
+                        rates = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_M5, 0, 60)
+                        if rates is not None and len(rates) > 0:
+                            bars_payload = {
+                                "symbol": sym,
+                                "timeframe": "M5",
+                                "bars": [
+                                    {
+                                        "time": int(r[0]),
+                                        "open": float(r[1]),
+                                        "high": float(r[2]),
+                                        "low": float(r[3]),
+                                        "close": float(r[4]),
+                                        "volume": float(r[5])
+                                    }
+                                    for r in rates
+                                ]
+                            }
+                            session.post(f"{BRIDGE_URL}/api/mt5/bars", json=bars_payload, timeout=1.5)
+                    except Exception:
+                        pass
+
+            # 6. Poll and execute pending trade commands for any of the 9 symbols
             try:
                 cmd_resp = session.get(f"{BRIDGE_URL}/api/mt5/commands", timeout=1.0)
                 if cmd_resp.status_code == 200:
