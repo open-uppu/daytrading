@@ -140,6 +140,13 @@ def _launch_background_web(host: str, port: int):
 
 def cmd_loop(args):
     """Runs the autonomous trading loop with the Multi-Asset Specialist Squad or single agent."""
+    if getattr(args, "continuous", False):
+        # Continuous mode: profit targets no longer stop or derisk the squad.
+        config.daily_profit_lock_enabled = False
+    if getattr(args, "no_loss_cutoff", False):
+        # Demo/unlimited request: do not halt the squad at -5% daily loss.
+        config.daily_max_loss_cutoff_enabled = False
+
     if getattr(args, "web", False):
         _launch_background_web(config.mt5_host, config.mt5_port)
 
@@ -160,11 +167,24 @@ def cmd_loop(args):
         # Keep simulated trades out of the live squad's journals / daily trade state.
         journal_dir = journal_dir / "paper_live"
 
+    loss_note = (
+        "[bold red]NO DAILY LOSS CUTOFF[/bold red]: keeps trading past -5%; broker margin is the only floor\n"
+        if not config.daily_max_loss_cutoff_enabled else ""
+    )
+    mode_note = "" if config.daily_profit_lock_enabled else (
+        "[bold yellow]CONTINUOUS MODE[/bold yellow]: no profit lock\n"
+    )
+    loss_line = (
+        "Loss Cutoff: [bold red]OFF[/bold red]"
+        if not config.daily_max_loss_cutoff_enabled
+        else "Loss Cutoff: [bold red]-5.0%[/bold red]"
+    )
     console.print(Panel(
         f"[bold cyan]Agentic Multi-Asset Specialist Squad[/bold cyan]\n"
         f"Active Specialists: [bold yellow]{', '.join([a.upper() for a in selected_agents])}[/bold yellow]\n"
         f"Timeframe: [bold]{effective_timeframe}[/bold] | Journal: [bold]{journal_dir}[/bold]\n"
-        f"Daily Profit Target: [bold green]+3.0%[/bold green] (Lock on achievement) | Loss Cutoff: [bold red]-5.0%[/bold red]\n"
+        f"Daily Profit Target: [bold green]+3.0%[/bold green] (Lock on achievement) | {loss_line}\n"
+        f"{mode_note}{loss_note}"
         f"Broker Mode: [bold]{args.mode}[/bold]{' (live bridge prices, persisted state)' if live_paper else ''} | Interval: [bold]{args.interval}s[/bold]",
         expand=False
     ))
@@ -363,6 +383,14 @@ def build_parser() -> argparse.ArgumentParser:
         loop_parser.add_argument("--journal-dir", default=None,
                                   help="Override the journal directory (default: journal/ for M5, journal_<tf>/ otherwise)")
         loop_parser.add_argument("--max-iter", type=int, default=None, help="Stop after N iterations (for testing)")
+        loop_parser.add_argument(
+            "--continuous", action="store_true", default=False,
+            help="Unlimited mode: never stop or derisk on PROFIT targets (no 3%% soft derisk, no 20%% hard lock)."
+        )
+        loop_parser.add_argument(
+            "--no-loss-cutoff", action="store_true", default=False,
+            help="Do not halt the squad at the daily -5%% loss cutoff. Broker margin stop-out is then the only floor."
+        )
         loop_parser.add_argument(
             "--wait-for-live-data", action="store_true",
             help="In MT5 mode, wait safely for fresh telemetry/bars instead of exiting when EA is not ready"

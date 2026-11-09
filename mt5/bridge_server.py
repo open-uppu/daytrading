@@ -129,6 +129,7 @@ class TelemetryPayload(BaseModel):
     closed_orders: List[Dict[str, Any]] = []
     currency: Optional[str] = "USD"
     is_cent: Optional[bool] = False
+    quotes: List[Dict[str, Any]] = []
 
 
 class ConfirmPayload(BaseModel):
@@ -231,6 +232,7 @@ async def receive_telemetry(payload: TelemetryPayload):
     _mt5_state["symbol"] = payload.symbol
     _mt5_state["bid"] = payload.bid
     _mt5_state["ask"] = payload.ask
+    _store_quotes(payload)
     _mt5_state["open_positions"] = payload.open_positions
     _mt5_state["connected"] = True
     _mt5_state["currency"] = payload.currency or ("USC" if "cent" in (payload.server or "").lower() else "USD")
@@ -373,6 +375,41 @@ async def get_bars(symbol: str, timeframe: str = "M15"):
         "bars": cached["bars"],
         "received_at": cached["received_at"],
         "changed_at": cached.get("changed_at", cached["received_at"]),
+    }
+
+
+def _store_quotes(payload: TelemetryPayload) -> None:
+    """Keep per-symbol bid/ask. Chart bid/ask is a fallback for the attached symbol."""
+    now = time.time()
+    book = _mt5_state.setdefault("quotes", {})
+    chart = normalize_symbol(payload.symbol or "")
+    if chart and payload.bid and payload.ask:
+        book[chart] = {"bid": float(payload.bid), "ask": float(payload.ask), "received_at": now}
+    for quote in payload.quotes or []:
+        sym = normalize_symbol(str(quote.get("symbol", "")))
+        bid = quote.get("bid")
+        ask = quote.get("ask")
+        if not sym or not isinstance(bid, (int, float)) or not isinstance(ask, (int, float)):
+            continue
+        if bid <= 0 or ask <= 0:
+            continue
+        book[sym] = {"bid": float(bid), "ask": float(ask), "received_at": now}
+
+
+@app.get("/api/mt5/quotes")
+async def get_quotes(symbol: str):
+    """Latest bid/ask for one canonical symbol. 404 when the EA has not sent it."""
+    sym = normalize_symbol(symbol)
+    quote = _mt5_state.get("quotes", {}).get(sym)
+    if not quote:
+        return {"symbol": sym, "bid": None, "ask": None, "age_sec": None}
+    age = max(0.0, time.time() - float(quote["received_at"]))
+    return {
+        "symbol": sym,
+        "bid": quote["bid"],
+        "ask": quote["ask"],
+        "spread": round(quote["ask"] - quote["bid"], 5),
+        "age_sec": round(age, 1),
     }
 
 
@@ -546,6 +583,34 @@ class MT5BridgeBroker(BaseBroker):
                     logger.warning(f"[MT5-CONFIRM] Poll failed for {cmd_id}: {type(e).__name__}: {e}")
             time.sleep(poll_interval)
         return None
+
+    def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Latest bid/ask for `symbol`. None when the bridge has no fresh quote."""
+        if not self.in_process:
+            try:
+                resp = httpx.get(
+                    f"{self.base_url}/api/mt5/quotes",
+                    params={"symbol": symbol},
+                    timeout=3.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("bid") and data.get("ask"):
+                        return data
+            except Exception as exc:
+                logger.warning("[MT5-QUOTE] %s: %s", type(exc).__name__, exc)
+                return None
+        quote = _mt5_state.get("quotes", {}).get(normalize_symbol(symbol))
+        if not quote:
+            return None
+        age = max(0.0, time.time() - float(quote["received_at"]))
+        return {
+            "symbol": normalize_symbol(symbol),
+            "bid": quote["bid"],
+            "ask": quote["ask"],
+            "spread": round(quote["ask"] - quote["bid"], 5),
+            "age_sec": round(age, 1),
+        }
 
     def get_account_info(self) -> Dict[str, Any]:
         """Returns account telemetry reported by MT5 terminal."""

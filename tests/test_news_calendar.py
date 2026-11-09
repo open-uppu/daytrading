@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from core.news_calendar import fetch_ff_calendar, get_news_window_status
+from core.news_calendar import fetch_ff_calendar, get_news_window_status, load_news_calendar
 
 
 class FakeResponse:
@@ -77,10 +77,11 @@ def _event(title, country, impact, minutes_from_now, now):
     }
 
 
-def test_window_status_calendar_none_fails_open():
+def test_window_status_calendar_none_fails_closed():
     now = datetime(2026, 9, 23, 12, 0, tzinfo=timezone.utc)
     status = get_news_window_status(now, None, window_min=15)
-    assert status == {"blackout": False, "derisk": False, "reason": "calendar unavailable, trading normally"}
+    assert status["blackout"] is True
+    assert status["reason"] == "NEWS_CALENDAR_UNAVAILABLE"
 
 
 def test_window_status_top_tier_event_triggers_blackout():
@@ -121,6 +122,27 @@ def test_window_status_event_outside_window_ignored():
     status = get_news_window_status(now, calendar, window_min=15)
     assert status["blackout"] is False
     assert status["derisk"] is False
+
+
+def test_load_news_calendar_uses_stale_success_when_fetch_fails(tmp_path):
+    cache = tmp_path / "ff_calendar_cache.json"
+    cache.write_text(json.dumps({"ts": 1_000.0, "value": [{"title": "CPI", "country": "USD"}]}), encoding="utf-8")
+    events, freshness = load_news_calendar(
+        cache, fetch_fn=lambda: None, now=1_000.0 + 7_000, ttl_sec=3600, none_ttl_sec=60, stale_max_sec=6 * 3600,
+    )
+    assert freshness == "stale"
+    assert events[0]["title"] == "CPI"
+    # Failed fetch must not erase the last good list.
+    assert json.loads(cache.read_text(encoding="utf-8"))["value"][0]["title"] == "CPI"
+
+
+def test_load_news_calendar_unavailable_when_no_cache_and_fetch_fails(tmp_path):
+    cache = tmp_path / "ff_calendar_cache.json"
+    events, freshness = load_news_calendar(
+        cache, fetch_fn=lambda: None, now=10.0, ttl_sec=3600, none_ttl_sec=60, stale_max_sec=3600,
+    )
+    assert events is None
+    assert freshness == "unavailable"
 
 
 def test_window_status_event_at_exact_boundary_included():

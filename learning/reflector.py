@@ -36,6 +36,9 @@ class TradeOutcome(BaseModel):
     rsi: float
     nearest_sr: Optional[float] = None
     notes: Optional[str] = ""
+    entry_reason: Optional[str] = None
+    news_reason: Optional[str] = None
+    spread: Optional[float] = None
 
 
 class TradeReflector:
@@ -138,6 +141,9 @@ class TradeReflector:
 - **Volume**: {trade.lot_size} lots
 - **Net PnL**: ${trade.pnl_usd:+.2f} ({trade.pnl_pct:+.2f}%)
 - **Exit Trigger**: `{trade.exit_reason}`
+- **Entry Reason**: {trade.entry_reason or "n/a"}
+- **News At Entry**: {trade.news_reason or "n/a"}
+- **Spread At Entry**: {trade.spread if trade.spread is not None else "n/a"}
 - **Confluence Score at Entry**: {trade.confluence_score}
 - **Pattern Detected**: {trade.pattern_detected}
 

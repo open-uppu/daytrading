@@ -1,5 +1,12 @@
 # 🤖 Multi-Agent Specialist Squad: Architecture & Responsibilities ("ใคร trade อะไร")
 
+> ⚠️ **ตัวเลขผลตอบแทนในเอกสารนี้ถูกหักล้างด้วยการรันซ้ำเมื่อ 2026-11-09** — อย่าใช้เป็นหลักฐานว่ากลยุทธ์ทำกำไรได้
+> - BTCUSD M5: **−58.86%** (737 ไม้, PF 0.66) ไม่ใช่ +4.87%
+> - ETHUSD M5: **−57.30%** (1,316 ไม้) ไม่ใช่ +1.63%
+> - Win rate "74.1%" **reproduce ไม่ได้** — baseline ที่วัดได้จริงคือ 38.5%
+> - RR ที่ดีที่สุดคือ 2.5 (ไม่ใช่ 1.44) และ trailing BE 0.6R ทำให้ expectancy **ติดลบ**
+> หลักฐาน: `research/strategy-sweep.md`, `research/factors-data.md`
+
 ระบบ Agentic Day Trading แบบแยกหน้าที่ Specialist ชัดเจนตามชนิดของสินทรัพย์ โดยแต่ละ Agent จะดูแลเพียง 1 สินทรัพย์อย่างสมบูรณ์แบบ มีกลยุทธ์ที่ผ่านการ Backtest ทางสถิติแล้วว่าดีที่สุด มี Rulebook และ Mistakes Database แยกอิสระจากกัน
 
 ```mermaid

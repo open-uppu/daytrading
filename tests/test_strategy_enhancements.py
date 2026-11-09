@@ -17,8 +17,11 @@ from agents.squad_manager import SquadManager
 from mt4.paper_broker import PaperTradingBroker
 
 
-def test_dynamic_trailing_breakeven():
+def test_dynamic_trailing_breakeven(monkeypatch):
     """Validates that profit >= +0.8R automatically modifies SL to Entry + Buffer."""
+    # Production default is now False (the 0.6R BE cost -0.16R OOS, see
+    # research/strategy-sweep.md); this test covers the mechanism itself.
+    monkeypatch.setattr(config, "trailing_be_enabled", True)
     broker = PaperTradingBroker(initial_balance=10000.0)
     with tempfile.TemporaryDirectory() as tmp:
         agent = GoldSpecialistAgent(
@@ -74,7 +77,7 @@ def test_mtf_macro_trend_filter():
             "reason": "mock-buy"
         }
         
-        n = 60
+        n = 220
         mock_m5 = pd.DataFrame({
             "timestamp": pd.date_range("2026-08-01 10:00", periods=n, freq="5min"),
             "open": [2500.0] * n,
@@ -131,10 +134,12 @@ def test_cadence_pacer_periodic_entry():
         )
         # Force evaluate_strategy_signal to return HOLD
         agent.evaluate_strategy_signal = lambda df, risk_band="NORMAL": {"action": "HOLD"}
+        # Isolate the cadence rule from the concurrency cap (default is now 1).
+        agent.max_open_positions = 3
         
-        # Create active trending market data
+        # Active but not extended: chase gate must not swallow the cadence check.
         n = 60
-        prices = [80000.0 + i * 10 for i in range(n)]
+        prices = [80000.0 + (i % 3) for i in range(n)]
         mock_df = pd.DataFrame({
             "timestamp": pd.date_range("2026-08-01 10:00", periods=n, freq="5min"),
             "open": prices,

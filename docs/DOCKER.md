@@ -32,6 +32,7 @@ Critical: `MetaTrader5` is a **Windows-only native application**. The EA **canno
 | `bridge` | FastAPI REST/Web dashboard on :8000  | Docker container   | ✅ always                            |
 | `squad`  | Live trading loop (all specialists)  | Docker container   | ⚠️ only with `--profile live`        |
 | `paper`  | Simulated trading (no MT5)           | Docker container   | ⚠️ only with `--profile paper`       |
+| `dev`    | Idle shell for analysis/tests/backtests against the live bridge (never trades on its own) | Docker container | ⚠️ only with `--profile dev` |
 | `AgenticMT5Bridge.mq5` | MT5 Expert Advisor  | **Windows host** (native) | manual |
 
 ---
@@ -50,6 +51,10 @@ docker compose up -d bridge
 
 # 4. Live: Start the trading squad (DANGER: real orders)
 docker compose --profile live up -d squad
+
+# 5. Dev: bridge + idle shell for analysis/backtests (no autonomous trading)
+docker compose --profile dev up -d
+docker exec -it agentic_dev python3 main.py run --agent=gold --mode=paper --max-iter=1
 ```
 
 ---

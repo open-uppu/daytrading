@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .env
+.venv/
+artifacts/*.log
 artifacts/charts/*.png
 artifacts/*_m15.png
 artifacts/*_m5.png

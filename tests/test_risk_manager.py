@@ -67,6 +67,17 @@ def test_daily_session_tracker_max_loss_cutoff():
     assert "DAILY_LOSS_LIMIT_HIT" in reason
 
 
+def test_daily_session_tracker_max_loss_cutoff_can_be_disabled(monkeypatch):
+    from config import config
+    monkeypatch.setattr(config, "daily_max_loss_cutoff_enabled", False)
+    tracker = DailySessionTracker(starting_balance=10000.0, target_pct=0.03, max_loss_pct=0.02)
+    tracker.record_closed_trade(-210.0)
+    assert tracker.is_max_loss_hit is False
+    can_trade, reason = tracker.can_open_new_trade()
+    assert can_trade is True
+    assert "AUTHORIZED" in reason
+
+
 def test_lot_size_calculation_for_gold():
     tracker = DailySessionTracker(starting_balance=10000.0)
     rm = RiskManager(session_tracker=tracker)

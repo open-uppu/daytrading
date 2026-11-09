@@ -73,6 +73,18 @@ class PaperTradingBroker(BaseBroker):
             'volume': volume
         })
 
+    def get_quote(self, symbol: str = "XAUUSD") -> Dict[str, Any]:
+        """Synthetic bid/ask so paper tests exercise the spread gate without MT5."""
+        spread = float(self.spread if self.spread > 0 else config.spread_points)
+        mid = float(self.current_price or 0.0)
+        return {
+            "symbol": symbol,
+            "bid": round(mid - spread / 2.0, 5),
+            "ask": round(mid + spread / 2.0, 5),
+            "spread": spread,
+            "age_sec": 0.0,
+        }
+
     def get_account_info(self) -> Dict[str, Any]:
         """Returns live account balance, equity, and margin."""
         self._update_equity()

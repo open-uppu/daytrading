@@ -162,7 +162,9 @@ class SquadManager:
         else:
             self.fixed_principal_usd: float = fixed_principal_usd if fixed_principal_usd is not None else config.fixed_principal_usd
         self.target_pct: float = config.daily_target_pct  # 3.0% soft: specialists derisk, portfolio keeps trading
-        self.hard_target_pct: float = config.daily_target_hard_pct  # 20.0% hard: locks all trading
+        self.hard_target_pct: float = config.daily_target_hard_pct  # 20.0% hard: locks all trading (unless continuous mode)
+        self.profit_lock_enabled: bool = config.daily_profit_lock_enabled  # False: continuous trading, no profit stop
+        self.loss_cutoff_enabled: bool = config.daily_max_loss_cutoff_enabled  # False: keep trading past the -5% cutoff
         self.recovery_loss_pct: float = config.daily_recovery_loss_pct  # 3.0%: new entries switch to recovery strategy
         self.max_loss_pct: float = config.daily_max_loss_pct  # -5.0%: hard stop
         self.target_profit_usd: float = self._daily_base_usd() * self.target_pct
@@ -292,9 +294,9 @@ class SquadManager:
         equity_return_pct = round((equity_pnl / daily_base) * 100.0, 2)
 
         target_reached = daily_return_pct >= (self.target_pct * 100.0)
-        hard_target_reached = daily_return_pct >= (self.hard_target_pct * 100.0)
+        hard_target_reached = self.profit_lock_enabled and daily_return_pct >= (self.hard_target_pct * 100.0)
         recovery_reached = equity_return_pct <= -(self.recovery_loss_pct * 100.0)
-        max_loss_reached = equity_return_pct <= -(self.max_loss_pct * 100.0)
+        max_loss_reached = self.loss_cutoff_enabled and equity_return_pct <= -(self.max_loss_pct * 100.0)
 
         return {
             "starting_balance": self.starting_portfolio_balance,
@@ -354,7 +356,7 @@ class SquadManager:
                 "portfolio": portfolio_status,
                 "specialist_results": {}
             }
-        elif portfolio_status["target_reached"]:
+        elif portfolio_status["target_reached"] and self.profit_lock_enabled:
             logger.info(f"[Squad Manager] Portfolio soft {self.target_pct*100:.0f}% target passed (+{portfolio_status['daily_return_pct']:.2f}%); specialists derisked, still trading toward {self.hard_target_pct*100:.0f}% hard target.")
 
         if portfolio_status["max_loss_reached"]:
@@ -376,7 +378,9 @@ class SquadManager:
                 f"switching new entries to their recovery strategy. Open positions unaffected."
             )
 
-        portfolio_risk_reached = self._portfolio_open_risk_usd() >= (self._daily_base_usd() * self.max_loss_pct)
+        portfolio_risk_reached = self.loss_cutoff_enabled and (
+            self._portfolio_open_risk_usd() >= (self._daily_base_usd() * self.max_loss_pct)
+        )
         agent_results = {}
         for key, agent in self.specialists.items():
             try:

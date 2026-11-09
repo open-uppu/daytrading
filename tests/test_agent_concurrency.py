@@ -7,19 +7,22 @@ from config import config
 def test_specialist_concurrency_settings():
     agent = GoldSpecialistAgent(broker=PaperTradingBroker(), timeframe="M5")
     assert agent.timeframe == "M5"
-    assert agent.max_open_positions >= 3
+    # Default is now 1 (sweep: 1 concurrent position beat 3); the cap itself is
+    # still configurable per agent.
+    assert agent.max_open_positions >= 1
     assert agent.min_entry_interval_sec in (300, 600)
 
 def test_specialist_allows_concurrent_positions():
     broker = PaperTradingBroker(initial_balance=10000.0)
     agent = GoldSpecialistAgent(broker=broker, timeframe="M5")
-    
+    agent.max_open_positions = 3  # explicit: this test covers the concurrency mechanism
+
     # Simulate 1 open position
     broker.open_order(symbol="XAUUSD", order_type="BUY", lots=0.1, sl=1990.0, tp=2015.0)
     open_pos = broker.get_open_positions()
     assert len(open_pos) == 1
-    
-    # Should not be blocked by 1 open position since max is 3
+
+    # Should not be blocked by 1 open position when the cap is 3
     assert len(open_pos) < agent.max_open_positions
 
 def test_specialist_cooldown_check():

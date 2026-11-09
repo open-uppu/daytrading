@@ -184,6 +184,11 @@ def load_historical_data(
 ) -> pd.DataFrame:
     """
     Loads historical data for XAUUSD, BTCUSD, or ETHUSD from local CSV or downloads fresh.
+
+    TIMEZONE WARNING (see docs/DATA-NOTES.md): CSVs collected from MT5 carry
+    **Asia/Bangkok (UTC+7)** timestamps, while frames fetched from Yahoo are UTC.
+    Subtract 7h from the CSV clock before applying any hour/session filter, and
+    never mix a CSV series with a bridge bar series without converting first.
     """
     clean_sym = symbol.upper().replace("-", "").replace("/", "")
     file_path = DATA_DIR / f"{clean_sym.lower()}_{timeframe.lower()}.csv"
@@ -216,10 +221,18 @@ def load_historical_data(
         return df
         
     except Exception as e:
-        logger.warning(f"Failed to fetch live data for {clean_sym}: {e}. Generating fallback dataset.")
+        logger.error(
+            "Failed to fetch live data for %s (%s). NOT overwriting %s with synthetic bars; "
+            "the fallback set is written under data/_synthetic/ instead.",
+            clean_sym, e, file_path,
+        )
         df = generate_fallback_data(symbol=clean_sym, bars=2500, timeframe=timeframe)
         try:
-            df.to_csv(file_path, index=False)
+            # Never let a failed download replace real history with a random walk:
+            # a backtest silently run on synthetic bars is worse than no backtest.
+            synth_dir = DATA_DIR / "_synthetic"
+            synth_dir.mkdir(parents=True, exist_ok=True)
+            df.to_csv(synth_dir / f"{clean_sym.lower()}_{timeframe.lower()}_SYNTHETIC.csv", index=False)
         except Exception:
             pass
         return df

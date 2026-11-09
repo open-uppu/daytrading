@@ -52,8 +52,11 @@ def trail_to_breakeven(broker: PaperTradingBroker, agent: BtcSpecialistAgent, ti
     return be_level
 
 
-def test_breakeven_stop_out_is_journaled_as_be_stop(tmp_path):
+def test_breakeven_stop_out_is_journaled_as_be_stop(tmp_path, monkeypatch):
     """A trade stopped out on the trailing breakeven SL must be journaled as BE_STOP, not SL_HIT."""
+    # BE is off by default in production now (it cost -0.16R OOS); enable it here
+    # to exercise the exit-attribution path.
+    monkeypatch.setattr(config, "trailing_be_enabled", True)
     broker = PaperTradingBroker(initial_balance=10000.0, symbol="BTCUSD")
     ticket = open_buy(broker)
     agent = BtcSpecialistAgent(broker=broker, timeframe="M5", journal_dir=tmp_path)
@@ -68,8 +71,9 @@ def test_breakeven_stop_out_is_journaled_as_be_stop(tmp_path):
     assert agent.be_sl_levels == {}
 
 
-def test_trailed_ticket_that_reaches_tp_is_still_journaled_as_tp_hit(tmp_path):
+def test_trailed_ticket_that_reaches_tp_is_still_journaled_as_tp_hit(tmp_path, monkeypatch):
     """The BE_STOP override must not swallow a trailed trade that ran all the way to TP."""
+    monkeypatch.setattr(config, "trailing_be_enabled", True)
     broker = PaperTradingBroker(initial_balance=10000.0, symbol="BTCUSD")
     ticket = open_buy(broker)
     agent = BtcSpecialistAgent(broker=broker, timeframe="M5", journal_dir=tmp_path)

@@ -7,16 +7,17 @@ from typing import Dict, Any, Optional, Tuple
 from abc import ABC, abstractmethod
 from pathlib import Path
 from datetime import datetime, timezone
+import json
 import logging
 import pandas as pd
 
 from config import config
 from mt4.broker_interface import BaseBroker
 from mt4.paper_broker import PaperTradingBroker
-from mt5.bridge_server import MT5BridgeBroker, MarketDataStale
+from mt5.bridge_server import MT5BridgeBroker, MarketDataStale, normalize_symbol
 from mt4.bridge_server import MT4BridgeBroker
 from risk.manager import DailySessionTracker, RiskManager, load_daily_trade_state, save_daily_trade_state
-from core.news_calendar import fetch_ff_calendar, get_news_window_status
+from core.news_calendar import fetch_ff_calendar, get_news_window_status, load_news_calendar
 from core.sentiment import get_cached_value
 from core.chart_generator import generate_candlestick_chart
 from core.indicators import compute_all_indicators, analyze_candlestick_patterns
@@ -118,6 +119,8 @@ class BaseSpecialistAgent(ABC):
         # All three symbols quote in USD, so a redundant fetch per agent per
         # TTL window (a free, keyless endpoint) is a fine tradeoff.
         self.news_calendar_cache_file = self.journal_dir / "ff_calendar_cache.json"
+        self._entry_context: Dict[int, Dict[str, Any]] = {}
+        self._last_entry_meta: Dict[str, Any] = {}
         _dts = load_daily_trade_state(self.daily_trade_state_file)
         self.session_tracker.closed_pnl_today = _dts["closed_pnl_today"]
         self.session_tracker.trades_count_today = _dts["trades_count_today"]
@@ -238,6 +241,7 @@ class BaseSpecialistAgent(ABC):
                     resolved_exit = "TP_HIT" if pnl > 0 else "SL_HIT"
 
                 # Perform post-trade autopsy & learning
+                entry_ctx = self._entry_context.pop(int(ticket), {})
                 outcome = TradeOutcome(
                     ticket=ticket,
                     symbol=t.get("symbol", self.symbol),
@@ -255,8 +259,11 @@ class BaseSpecialistAgent(ABC):
                     confluence_score=75.0,
                     pattern_detected=self.strategy_name,
                     ema_200=t.get("open_price", 0.0),
-                    atr=self.min_sl_dist,
-                    rsi=50.0
+                    atr=float(entry_ctx.get("atr", self.min_sl_dist)),
+                    rsi=50.0,
+                    entry_reason=entry_ctx.get("reason") or None,
+                    news_reason=entry_ctx.get("news_reason") or None,
+                    spread=entry_ctx.get("spread"),
                 )
                 res = self.reflector.process_closed_trade(outcome)
                 logger.info(
@@ -450,6 +457,110 @@ class BaseSpecialistAgent(ABC):
             return False, f"Cadence cooldown active ({rem}s remaining for 10-min target)"
         return True, f"Cooldown cleared ({int(elapsed)}s since last entry)"
 
+    def _chase_block_reason(self, action: str, price: float, ema_20: float, atr: float) -> Optional[str]:
+        """Block entries that are already extended more than max_chase_atr from EMA20."""
+        limit = float(getattr(config, "max_chase_atr", 2.0) or 0.0)
+        if action not in ("BUY", "SELL") or limit <= 0 or atr <= 0:
+            return None
+        dist = (price - ema_20) / atr
+        if action == "BUY" and dist > limit:
+            return f"CHASE_BLOCKED: price is {dist:.2f} ATR above EMA20 (limit {limit:.1f})"
+        if action == "SELL" and -dist > limit:
+            return f"CHASE_BLOCKED: price is {-dist:.2f} ATR below EMA20 (limit {limit:.1f})"
+        return None
+
+    def _spread_block(
+        self,
+        action: str,
+        entry: float,
+        sl: float,
+        tp: float,
+        news_reason: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Fail closed when the live quote is missing, wide, or ruins net R:R."""
+        self._last_entry_meta = {"spread": None, "net_rr": None, "news_reason": news_reason}
+        if not getattr(config, "spread_gate_enabled", True):
+            return None
+        getter = getattr(self.broker, "get_quote", None)
+        quote = None
+        if callable(getter):
+            try:
+                quote = getter(self.symbol)
+            except Exception as exc:
+                logger.warning("[SPREAD-GATE] quote lookup failed: %s", exc)
+                quote = None
+        age = None if not quote else quote.get("age_sec")
+        bid = None if not quote else quote.get("bid")
+        ask = None if not quote else quote.get("ask")
+        max_age = float(getattr(config, "spread_quote_max_age_sec", 30))
+        if bid is None or ask is None or age is None or float(age) > max_age:
+            return self._gate_result("SPREAD_UNAVAILABLE", "SPREAD_UNAVAILABLE: no fresh bid/ask")
+        spread = float(ask) - float(bid)
+        if spread < 0:
+            return self._gate_result("SPREAD_UNAVAILABLE", "SPREAD_UNAVAILABLE: ask below bid")
+        cap = float(config.max_entry_spread_xauusd) if "XAU" in self.symbol.upper() else entry * 0.001
+        if spread > cap:
+            return self._gate_result("SPREAD_WIDE", f"SPREAD_WIDE: {spread:.4f} > cap {cap:.4f}")
+        risk = abs(entry - float(sl)) + spread
+        reward = abs(float(tp) - entry) - spread
+        net_rr = reward / risk if risk > 0 else 0.0
+        self._last_entry_meta = {"spread": round(spread, 5), "net_rr": round(net_rr, 3), "news_reason": news_reason}
+        if net_rr < float(config.min_rr_ratio):
+            return self._gate_result(
+                "NET_RR_TOO_LOW",
+                f"NET_RR_TOO_LOW: {net_rr:.2f} after spread {spread:.4f} < min {config.min_rr_ratio}",
+            )
+        return None
+
+    def _gate_result(self, status: str, reason: str) -> Dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "asset": self.asset_name,
+            "iteration": self.iteration_count,
+            "status": status,
+            "reason": reason,
+        }
+
+    def _append_entry_log(
+        self,
+        ticket: Any,
+        action: str,
+        entry: float,
+        sl: float,
+        tp: float,
+        reason: str,
+        signal_type: str,
+        news_reason: str,
+        atr: float,
+        ema_20: float,
+    ) -> None:
+        meta = self._last_entry_meta or {}
+        record = {
+            "time_utc": datetime.now(timezone.utc).isoformat(),
+            "ticket": ticket,
+            "symbol": self.symbol,
+            "side": action,
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "signal_type": signal_type,
+            "reason": reason,
+            "news_reason": news_reason or meta.get("news_reason", ""),
+            "spread": meta.get("spread"),
+            "net_rr": meta.get("net_rr"),
+            "atr": atr,
+            "ema20_distance_atr": round((entry - ema_20) / atr, 3) if atr else None,
+        }
+        if ticket is not None:
+            self._entry_context[int(ticket)] = record
+        try:
+            path = Path(self.journal_dir) / "entry_log.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record) + "\n")
+        except OSError as exc:
+            logger.warning("[ENTRY-LOG] could not append: %s", exc)
+
     def step(self, allow_new_entry: bool = True, risk_band: str = "NORMAL") -> Dict[str, Any]:
         """
         Executes one complete autonomous analysis and execution cycle for this asset.
@@ -472,7 +583,8 @@ class BaseSpecialistAgent(ABC):
         all_open = self.broker.get_open_positions()
         symbol_positions = [
             p for p in all_open
-            if p.get("symbol") == self.symbol and p.get("magic", 888999) == self.magic
+            if normalize_symbol(str(p.get("symbol", ""))) == normalize_symbol(self.symbol)
+            and p.get("magic", 888999) == self.magic
         ]
         
         df_bars = None
@@ -527,14 +639,18 @@ class BaseSpecialistAgent(ABC):
 
         news_status = {"blackout": False, "derisk": False, "reason": "disabled"}
         if getattr(config, "news_blackout_enabled", True):
-            calendar = get_cached_value(
+            calendar, freshness = load_news_calendar(
                 self.news_calendar_cache_file,
-                config.news_calendar_cache_ttl_sec,
-                fetch_ff_calendar,
+                fetch_fn=fetch_ff_calendar,
+                ttl_sec=config.news_calendar_cache_ttl_sec,
+                none_ttl_sec=config.news_calendar_none_ttl_sec,
+                stale_max_sec=config.news_calendar_stale_max_sec,
             )
             news_status = get_news_window_status(
                 datetime.now(timezone.utc), calendar, config.news_blackout_window_min
             )
+            if freshness == "stale" and not news_status["blackout"]:
+                news_status["reason"] = f"stale calendar in use; {news_status['reason']}"
             if news_status["blackout"]:
                 logger.info(f"{prefix} [NEWS-BLACKOUT] {news_status['reason']}")
                 return {
@@ -581,7 +697,7 @@ class BaseSpecialistAgent(ABC):
 
         # 5. Fetch Market Data (Main Execution Timeframe e.g. M5)
         try:
-            df_main = self.broker.get_market_data(symbol=self.symbol, timeframe=self.timeframe, bars=60)
+            df_main = self.broker.get_market_data(symbol=self.symbol, timeframe=self.timeframe, bars=250)
         except MarketDataStale as exc:
             logger.info(f"{prefix} Market closed / feed frozen, no entry: {exc}")
             return {
@@ -608,17 +724,21 @@ class BaseSpecialistAgent(ABC):
         atr = float(latest.get("atr_14", self.min_sl_dist))
         ema_20 = float(latest.get("ema_20", current_price))
         ema_50 = float(latest.get("ema_50", current_price))
-        ema_200 = float(latest.get("ema_200", current_price))
+        # EMA200 seeded on a short window is not a real 200-bar average.
+        ema_200_valid = len(df_main) >= 200
+        ema_200 = float(latest.get("ema_200", current_price)) if ema_200_valid else current_price
         rsi = float(latest.get("rsi_14", 50.0))
 
         # 5b. Multi-Timeframe (MTF) Macro Filter: Fetch HTF trend (M15) if running on M5
         htf_ema_200 = ema_200
+        htf_ema_200_valid = False
         if self.timeframe == "M5" and getattr(config, "timeframe_htf", "M15"):
             try:
-                df_htf = self.broker.get_market_data(symbol=self.symbol, timeframe=config.timeframe_htf, bars=60)
-                if len(df_htf) >= 30:
+                df_htf = self.broker.get_market_data(symbol=self.symbol, timeframe=config.timeframe_htf, bars=250)
+                if len(df_htf) >= 200:
                     df_htf = compute_all_indicators(df_htf)
                     htf_ema_200 = float(df_htf.iloc[-1].get("ema_200", ema_200))
+                    htf_ema_200_valid = True
             except Exception as e:
                 logger.debug(f"{prefix} HTF fetch note: {e}")
 
@@ -661,7 +781,9 @@ class BaseSpecialistAgent(ABC):
 
             if can_pacer and elapsed >= self.min_entry_interval_sec and is_market_active:
                 sl_dist = max(1.3 * atr, self.min_sl_dist)
-                tp_dist = round(1.5 * sl_dist, 2)
+                # Was hardcoded 1.5R, so the config RR never reached live M5
+                # entries (backtest used 1.44, sweep says 2.5 is best OOS).
+                tp_dist = round(getattr(config, "target_rr_ratio", 1.5) * sl_dist, 2)
                 if current_price >= htf_ema_200:
                     action = "BUY"
                     sl_candidate = round(current_price - sl_dist, 2)
@@ -690,8 +812,20 @@ class BaseSpecialistAgent(ABC):
                     "session_summary": summary
                 }
 
-        # 7b. Multi-Timeframe Macro Trend Alignment Gating
-        if self.timeframe == "M5" and config.timeframe_htf:
+        chase_reason = self._chase_block_reason(action, current_price, ema_20, atr)
+        if chase_reason:
+            logger.info(f"{prefix} [CHASE-GATE] {chase_reason}")
+            return {
+                "symbol": self.symbol,
+                "asset": self.asset_name,
+                "iteration": self.iteration_count,
+                "status": "CHASE_BLOCKED",
+                "reason": chase_reason,
+                "session_summary": summary,
+            }
+
+        # 7b. Multi-Timeframe Macro Trend Alignment Gating (only with a real EMA200)
+        if self.timeframe == "M5" and config.timeframe_htf and htf_ema_200_valid:
             if action == "BUY" and current_price < htf_ema_200:
                 logger.info(f"{prefix} [MTF-GATE] Vetoed BUY: Price (${current_price:,.2f}) is below HTF {config.timeframe_htf} EMA 200 (${htf_ema_200:,.2f})")
                 return {
@@ -807,6 +941,12 @@ class BaseSpecialistAgent(ABC):
                 "session_summary": summary
             }
 
+        spread_block = self._spread_block(action, current_price, sl_candidate, tp_candidate, news_status.get("reason", ""))
+        if spread_block:
+            logger.info(f"{prefix} [SPREAD-GATE] {spread_block['reason']}")
+            spread_block["session_summary"] = summary
+            return spread_block
+
         # 10. Execute Order via Broker
         logger.info(
             f"[3. สั่งซื้อจริง / REAL-ORDER-DISPATCH] {self.symbol} กำลังส่งคำสั่ง {action} {lot_size} lots "
@@ -856,6 +996,18 @@ class BaseSpecialistAgent(ABC):
 
         ticket = order_res.get("ticket")
         self.last_entry_time = datetime.now()
+        self._append_entry_log(
+            ticket=ticket,
+            action=action,
+            entry=current_price,
+            sl=sl_candidate,
+            tp=tp_candidate,
+            reason=reason,
+            signal_type=signal.get("signal_type", ""),
+            news_reason=news_status.get("reason", ""),
+            atr=atr,
+            ema_20=ema_20,
+        )
         logger.info(
             f"[3. สั่งซื้อจริง / REAL-ORDER-FILLED] {self.symbol} โบรกเกอร์ยืนยันคำสั่งสำเร็จ! "
             f"Ticket: #{ticket} | {action} {lot_size} lots @ ${current_price:,.2f} "

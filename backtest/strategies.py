@@ -18,6 +18,7 @@ from core.indicators import (
     detect_order_block_retest
 )
 from core.vision_analyzer import VisionAnalyzer
+from config import config
 from core.confluence import ConfluenceEngine
 from learning.reflector import PreTradeFilter
 
@@ -415,11 +416,17 @@ def strategy_m5_scalper(
     prev = df.iloc[-2]
 
     close_p = float(latest['close'])
+    ema_200_valid = len(window) >= 200
+    if ema_200_valid:
+        ema_200_series = compute_ema(window['close'], 200)
+        window_ema_200 = float(ema_200_series.iloc[-1])
+    else:
+        window_ema_200 = close_p
     ema_9 = float(latest['ema_9'])
     ema_21 = float(latest['ema_21'])
     ema_20 = float(latest.get('ema_20', ema_21))
     ema_50 = float(latest.get('ema_50', close_p))
-    ema_200 = float(latest.get('ema_200', close_p))
+    ema_200 = window_ema_200 if ema_200_valid else close_p
     atr = max(float(latest['atr_14']), 0.2)
     rsi = float(latest['rsi_14'])
 
@@ -485,12 +492,12 @@ def strategy_m5_scalper(
     # 1. Gold (XAUUSD) M5 Scalper: Session Expansion Momentum Cross
     # -------------------------------------------------------------
     if "gold" in asset or "xau" in asset:
-        # Active market session filter: London & New York session (07:00 - 21:00 UTC)
-        if hour is not None and not (7 <= hour <= 21):
-            return {"action": "HOLD"}
-
+        # NOTE (2026-11-09): the old "07:00-21:00 UTC" session gate was removed.
+        # The CSV clock is Asia/Bangkok (UTC+7), so `7 <= hour <= 21` actually
+        # covered 00:00-14:00 UTC and cut out the NY afternoon. The sweep found
+        # trading all day beat every filtered variant OOS (+6.27% vs +2.85%).
         sl_dist = max(1.25 * atr, 1.0)
-        tp_dist = round(1.8 * atr, _price_precision_for(close_p))  # Fast Scalper Exit
+        tp_dist = round(sl_dist * config.target_rr_ratio, _price_precision_for(close_p))
 
         # Bullish Cross with macro trend filter (Price > EMA 200)
         bullish_cross = (prev_9 <= prev_21) and (ema_9 > ema_21)
@@ -500,7 +507,9 @@ def strategy_m5_scalper(
             and rsi_div_confirms_bull and ob_confirms_bull
             and fng_confirms_bull and news_confirms_bull
         )
-        if bullish_cross and close_p > ema_200 and 44.0 <= rsi <= 68.0 and gold_confirms_bull:
+        macro_bull = (not ema_200_valid) or close_p > ema_200
+        macro_bear = (not ema_200_valid) or close_p < ema_200
+        if bullish_cross and macro_bull and 44.0 <= rsi <= 68.0 and gold_confirms_bull:
             sl = round(close_p - sl_dist, _price_precision_for(close_p))
             tp = round(close_p + tp_dist, _price_precision_for(close_p))
             return {"action": "BUY", "sl": sl, "tp": tp, "reason": "Gold M5 Session Momentum Cross Buy", "signal_type": "CROSS"}
@@ -513,10 +522,23 @@ def strategy_m5_scalper(
             and rsi_div_confirms_bear and ob_confirms_bear
             and fng_confirms_bear and news_confirms_bear
         )
-        if bearish_cross and close_p < ema_200 and 32.0 <= rsi <= 56.0 and gold_confirms_bear:
+        if bearish_cross and macro_bear and 32.0 <= rsi <= 56.0 and gold_confirms_bear:
             sl = round(close_p + sl_dist, _price_precision_for(close_p))
             tp = round(close_p - tp_dist, _price_precision_for(close_p))
             return {"action": "SELL", "sl": sl, "tp": tp, "reason": "Gold M5 Session Momentum Cross Sell", "signal_type": "CROSS"}
+
+        # Pullback into a live trend, not a fresh cross and not a chase (caller also blocks >2 ATR).
+        near_fast = abs(close_p - ema_21) <= 1.0 * atr
+        if (not bullish_cross) and ema_9 > ema_21 and near_fast and macro_bull and 44.0 <= rsi <= 68.0 and gold_confirms_bull:
+            sl = round(close_p - sl_dist, _price_precision_for(close_p))
+            tp = round(close_p + tp_dist, _price_precision_for(close_p))
+            note = "" if ema_200_valid else " EMA200 unavailable"
+            return {"action": "BUY", "sl": sl, "tp": tp, "reason": f"Gold M5 Pullback Buy{note}", "signal_type": "PULLBACK"}
+        if (not bearish_cross) and ema_9 < ema_21 and near_fast and macro_bear and 32.0 <= rsi <= 56.0 and gold_confirms_bear:
+            sl = round(close_p + sl_dist, _price_precision_for(close_p))
+            tp = round(close_p - tp_dist, _price_precision_for(close_p))
+            note = "" if ema_200_valid else " EMA200 unavailable"
+            return {"action": "SELL", "sl": sl, "tp": tp, "reason": f"Gold M5 Pullback Sell{note}", "signal_type": "PULLBACK"}
 
         return {"action": "HOLD"}
 
@@ -525,7 +547,7 @@ def strategy_m5_scalper(
     # -------------------------------------------------------------
     elif "btc" in asset:
         sl_dist = max(1.25 * atr, 25.0)
-        tp_dist = round(1.8 * atr, _price_precision_for(close_p))  # Fast Scalper Exit
+        tp_dist = round(sl_dist * config.target_rr_ratio, _price_precision_for(close_p))
 
         bullish_cross = ((prev_20 <= prev_50) and (ema_20 > ema_50)) or ((prev_9 <= prev_21) and (ema_9 > ema_21))
         bullish_pullback = (
@@ -573,7 +595,7 @@ def strategy_m5_scalper(
         curr_mid = float(rolling_mean.iloc[-1])
 
         sl_dist = max(1.25 * atr, 2.0)
-        tp_dist = round(1.8 * atr, _price_precision_for(close_p))  # Fast Scalper Exit
+        tp_dist = round(sl_dist * config.target_rr_ratio, _price_precision_for(close_p))
 
         # Bullish: BB Lower bounce OR EMA Pullback in uptrend
         bb_bounce = (close_p <= curr_lower + (0.3 * atr)) and rsi <= 35.0

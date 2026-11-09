@@ -57,7 +57,8 @@ class DailySessionTracker:
         target_pct: float = None,
         hard_target_pct: float = None,
         max_loss_pct: float = None,
-        derisk_factor: float = None
+        derisk_factor: float = None,
+        profit_lock_enabled: bool = None
     ):
         self.session_date: date = datetime.now(timezone.utc).date()
         self.starting_balance: float = starting_balance
@@ -65,6 +66,10 @@ class DailySessionTracker:
         self.hard_target_pct: float = hard_target_pct or config.daily_target_hard_pct
         self.max_loss_pct: float = max_loss_pct or config.daily_max_loss_pct
         self.derisk_factor: float = derisk_factor or config.daily_target_derisk_factor
+        self.profit_lock_enabled: bool = (
+            config.daily_profit_lock_enabled if profit_lock_enabled is None else profit_lock_enabled
+        )
+        self.loss_cutoff_enabled: bool = bool(config.daily_max_loss_cutoff_enabled)
 
         self.target_profit_usd: float = self.starting_balance * self.target_pct
         self.hard_target_profit_usd: float = self.starting_balance * self.hard_target_pct
@@ -113,17 +118,23 @@ class DailySessionTracker:
 
     @property
     def is_hard_target_reached(self) -> bool:
-        """Hard ceiling (default 6%): trading locks entirely past this."""
+        """Hard ceiling (default 20%): trading locks entirely past this. Always False in continuous mode."""
+        if not self.profit_lock_enabled:
+            return False
         return self.closed_pnl_today >= self.hard_target_profit_usd
 
     @property
     def risk_multiplier(self) -> float:
-        """1.0 normally; derisk_factor once the soft target is reached."""
+        """1.0 normally; derisk_factor once the soft target is reached (always 1.0 in continuous mode)."""
+        if not self.profit_lock_enabled:
+            return 1.0
         return self.derisk_factor if self.is_target_reached else 1.0
 
     @property
     def is_max_loss_hit(self) -> bool:
-        """Checks if the daily loss limit has been breached."""
+        """Checks if the daily loss limit has been breached (never when the cutoff is disabled)."""
+        if not self.loss_cutoff_enabled:
+            return False
         return self.closed_pnl_today <= -self.max_loss_usd
 
     def can_open_new_trade(self) -> Tuple[bool, str]:
@@ -146,7 +157,7 @@ class DailySessionTracker:
                 f"Trading ceased for safety!"
             )
             
-        if self.is_target_reached:
+        if self.profit_lock_enabled and self.is_target_reached:
             return True, (
                 f"AUTHORIZED_DERISKED: Daily profit +{self.closed_pnl_today:.2f} USD "
                 f"(+{self.daily_return_pct:.2f}%) passed the soft target of "
@@ -304,11 +315,12 @@ class RiskManager:
             ), 0.0
 
         # Verify potential loss does not breach daily loss cutoff
-        remaining_loss_allowance = (
-            (self.session_tracker.starting_balance * self.session_tracker.max_loss_pct) +
-            self.session_tracker.closed_pnl_today
-        )
-        if potential_loss > remaining_loss_allowance and self.session_tracker.closed_pnl_today < 0:
-            return False, f"Potential loss (${potential_loss:.1f}) exceeds remaining daily allowance (${remaining_loss_allowance:.1f})", 0.0
+        if self.session_tracker.loss_cutoff_enabled:
+            remaining_loss_allowance = (
+                (self.session_tracker.starting_balance * self.session_tracker.max_loss_pct) +
+                self.session_tracker.closed_pnl_today
+            )
+            if potential_loss > remaining_loss_allowance and self.session_tracker.closed_pnl_today < 0:
+                return False, f"Potential loss (${potential_loss:.1f}) exceeds remaining daily allowance (${remaining_loss_allowance:.1f})", 0.0
 
         return True, "Risk validation passed", lot_size

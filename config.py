@@ -19,12 +19,24 @@ class TradingConfig(BaseSettings):
     daily_target_pct: float = 0.03   # 3% soft target/day: risk per trade is halved past this
     daily_target_hard_pct: float = 0.20  # 20% hard target/day: trading locks entirely past this
     daily_target_derisk_factor: float = 0.5  # risk-per-trade multiplier between soft and hard target
+    # Continuous ("unlimited") mode: when False the squad never stops or derisks on
+    # PROFIT targets -- it keeps scanning and trading for the whole session.
+    daily_profit_lock_enabled: bool = True
     daily_max_loss_pct: float = 0.05 # 5% hard-stop max daily loss cutoff (close everything, halt for the day) -- against the real balance the day started with
+    # When False the squad keeps trading after the daily loss cutoff instead of
+    # closing everything and halting. The broker's own margin stop-out becomes
+    # the only floor, so equity can go to zero. Off by request on a DEMO account.
+    daily_max_loss_cutoff_enabled: bool = True
     daily_recovery_loss_pct: float = 0.03  # 3%: new entries switch to each specialist's designated recovery strategy (only XAG has one); open positions untouched
     risk_per_trade_pct: float = 0.005  # 0.5% per trade for high-frequency scalping
     min_rr_ratio: float = 1.3        # Minimum 1:1.3 Risk-to-Reward ratio
-    target_rr_ratio: float = 2.0     # Default 1:2.0 RR (M5 scalper overrides to 1:1.5)
-    trailing_be_enabled: bool = True # Enable Dynamic Breakeven Trailing
+    # 2026-11-09 sweep (research/strategy-sweep.md): RR 2.5 was the only setting
+    # that improved both in-sample (+0.098R) and out-of-sample (+0.171R).
+    target_rr_ratio: float = 2.5     # Default 1:2.5 RR (M5 scalper uses this too)
+    # 2026-11-09 sweep: trailing BE at 0.6R flipped expectancy from +0.084R to
+    # -0.211R (IS) and +0.102R to -0.162R (OOS). The backtest had no BE at all,
+    # so this switch also removes a live-vs-backtest mismatch.
+    trailing_be_enabled: bool = False # Enable Dynamic Breakeven Trailing
     trailing_be_trigger_r: float = 0.6 # Lock breakeven at +0.6R: at 1.0R winners that reached ~0.7-0.8R gave it all back to a full SL (16-trade live sample, 2026-09-21)
     ml_filter_enabled: bool = True   # Enable ML Meta-Labeling confidence filter
     ml_confidence_threshold: float = 0.70 # Confidence threshold (0.70 - 0.85)
@@ -59,11 +71,18 @@ class TradingConfig(BaseSettings):
     # News Blackout Filter (free, keyless FF/FairEconomy economic calendar)
     news_blackout_enabled: bool = True        # kill switch
     news_blackout_window_min: int = 15        # minutes before/after a High-impact USD event
-    news_calendar_cache_ttl_sec: int = 3600   # feed refreshes weekly; hourly re-fetch is plenty
+    news_calendar_cache_ttl_sec: int = 3600   # fresh successful calendar
+    news_calendar_none_ttl_sec: int = 60      # failed fetch is retried after 60s, not cached for an hour
+    news_calendar_stale_max_sec: int = 6 * 3600  # last good list may be used if the live fetch fails
+    # Spread / chase gates (2026-11-09 human-like entry filters)
+    spread_gate_enabled: bool = True
+    spread_quote_max_age_sec: int = 30
+    max_entry_spread_xauusd: float = 0.80     # ~2-3x a normal 0.25-0.40 gold spread
+    max_chase_atr: float = 2.0                # block entries extended more than this from EMA20
 
     # Loop & Observation settings
     loop_interval_sec: int = 10       # Poll every 10 seconds for high-frequency scalping
-    max_open_positions: int = 3       # Allow up to 3 concurrent scalp positions per asset
+    max_open_positions: int = 1       # One position at a time (sweep: 1 beat 3)
     
     # Paths
     project_root: Path = BASE_DIR

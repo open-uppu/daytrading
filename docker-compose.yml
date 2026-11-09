@@ -71,7 +71,7 @@ services:
       - ./main.py:/app/main.py
       - ./test_order.py:/app/test_order.py
       - ./config.py:/app/config.py
-    command: ["python3", "main.py", "run", "--agent=all9", "--mode=mt5", "--interval=15", "--wait-for-live-data"]
+    command: ["python3", "main.py", "run", "--agent=all9", "--mode=mt5", "--interval=15", "--wait-for-live-data", "--continuous", "--no-loss-cutoff"]
 
   # 3. Standalone Paper Trading (No MT5 needed, runs autonomous simulation)
   paper:
@@ -93,6 +93,43 @@ services:
       - ./artifacts:/app/artifacts
       - ./data:/app/data
     command: ["python3", "main.py", "run", "--agent=all", "--mode=paper", "--paper-feed=bridge", "--interval=10", "--wait-for-live-data"]
+
+  # 6. Dev shell — analysis/tests/backtests against the live bridge, no auto-trading.
+  #    `docker exec -it agentic_dev bash` then run any command by hand, e.g.
+  #    `python3 main.py run --agent=gold --mode=paper --max-iter=1`
+  #    Nothing starts trading on its own: the container just idles.
+  dev:
+    build: .
+    container_name: agentic_dev
+    profiles: ["dev"]
+    restart: "no"
+    depends_on:
+      bridge:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - MT5_HOST=bridge
+      - MT5_PORT=8000
+      - BROKER_MODE=paper
+    volumes:
+      - ./journal:/app/journal
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+      - ./agents:/app/agents
+      - ./core:/app/core
+      - ./mt5:/app/mt5
+      - ./mt4:/app/mt4
+      - ./frontend:/app/frontend
+      - ./risk:/app/risk
+      - ./learning:/app/learning
+      - ./backtest:/app/backtest
+      - ./scripts:/app/scripts
+      - ./tests:/app/tests
+      - ./main.py:/app/main.py
+      - ./test_order.py:/app/test_order.py
+      - ./config.py:/app/config.py
+    command: ["sleep", "infinity"]
 
   # 4. Multi-Account: Secondary Account Bridge (e.g. Demo Standard on port 8001)
   bridge_demo:
