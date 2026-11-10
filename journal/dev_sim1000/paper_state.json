@@ -1,0 +1,45 @@
+{
+ "version": 1,
+ "saved_at": "2026-11-09T02:56:28.252777+00:00",
+ "initial_balance": 1000.0,
+ "balance": 990.01,
+ "next_ticket": 100003,
+ "day": "2026-11-09",
+ "day_start_balance": 1000.0,
+ "open_positions": {
+  "100002": {
+   "ticket": 100002,
+   "symbol": "XAUUSD",
+   "type": "BUY",
+   "lots": 0.01,
+   "open_price": 4120.46,
+   "open_time": "2026-11-09 02:56:28",
+   "open_bar_ts": 1794192900,
+   "sl": 4113.29,
+   "tp": 4138.58,
+   "comment": "XAUUSD_M5_Scalp",
+   "magic": 888999,
+   "contract_size": 100.0,
+   "unrealized_pnl": 0.0
+  }
+ },
+ "closed_orders": [
+  {
+   "ticket": 100001,
+   "symbol": "XAUUSD",
+   "type": "BUY",
+   "lots": 0.01,
+   "open_price": 4129.67,
+   "close_price": 4119.68,
+   "open_time": "2026-11-09 02:13:10",
+   "close_time": "2026-11-09 02:56:07",
+   "sl": 4119.68,
+   "tp": 4154.21,
+   "pnl_usd": -9.99,
+   "pnl_pct": -1.0,
+   "exit_reason": "SL_HIT",
+   "comment": "XAUUSD_M5_Scalp",
+   "magic": 888999
+  }
+ ]
+}

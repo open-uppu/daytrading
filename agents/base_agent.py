@@ -457,6 +457,33 @@ class BaseSpecialistAgent(ABC):
             return False, f"Cadence cooldown active ({rem}s remaining for 10-min target)"
         return True, f"Cooldown cleared ({int(elapsed)}s since last entry)"
 
+    def _rejection_wick_block_reason(self, action: str, df_main: pd.DataFrame, price: float) -> Optional[str]:
+        """Do not buy under a failed upside break, or sell above a failed downside break."""
+        if action not in ("BUY", "SELL") or df_main is None or len(df_main) < 3:
+            return None
+        # The last row is usually still forming. Judge the last closed bar.
+        closed = df_main.iloc[-2]
+        pattern = analyze_candlestick_patterns(closed)
+        high_p = float(closed["high"])
+        low_p = float(closed["low"])
+        close_p = float(closed["close"])
+        midpoint = (high_p + low_p) / 2.0
+        if action == "BUY" and price < high_p and close_p <= midpoint and (
+            pattern.get("bearish_pin") or float(pattern.get("upper_wick_ratio", 0.0)) >= 0.50
+        ):
+            return (
+                f"REJECTION_WICK_BLOCKED: last closed bar rejected {high_p:.2f} "
+                f"(upper wick {float(pattern.get('upper_wick_ratio', 0.0)):.0%}); wait for a close above it"
+            )
+        if action == "SELL" and price > low_p and close_p >= midpoint and (
+            pattern.get("bullish_pin") or float(pattern.get("lower_wick_ratio", 0.0)) >= 0.50
+        ):
+            return (
+                f"REJECTION_WICK_BLOCKED: last closed bar rejected {low_p:.2f} "
+                f"(lower wick {float(pattern.get('lower_wick_ratio', 0.0)):.0%}); wait for a close below it"
+            )
+        return None
+
     def _chase_block_reason(self, action: str, price: float, ema_20: float, atr: float) -> Optional[str]:
         """Block entries that are already extended more than max_chase_atr from EMA20."""
         limit = float(getattr(config, "max_chase_atr", 2.0) or 0.0)
@@ -811,6 +838,18 @@ class BaseSpecialistAgent(ABC):
                     "signal": signal,
                     "session_summary": summary
                 }
+
+        rejection_reason = self._rejection_wick_block_reason(action, df_main, current_price)
+        if rejection_reason:
+            logger.info(f"{prefix} [REJECTION-GATE] {rejection_reason}")
+            return {
+                "symbol": self.symbol,
+                "asset": self.asset_name,
+                "iteration": self.iteration_count,
+                "status": "REJECTION_WICK_BLOCKED",
+                "reason": rejection_reason,
+                "session_summary": summary,
+            }
 
         chase_reason = self._chase_block_reason(action, current_price, ema_20, atr)
         if chase_reason:

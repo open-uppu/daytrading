@@ -1,0 +1,1 @@
+{"time_utc": "2026-11-09T09:10:03.778035+00:00", "ticket": 100001, "symbol": "XAUUSD", "side": "BUY", "entry": 2648.77, "sl": 2644.76, "tp": 2658.78, "signal_type": "CADENCE_PACER", "reason": "XAUUSD M5 Rapid Cadence Entry (Macro Bullish)", "news_reason": "no high-impact USD news in window", "spread": 0.25, "net_rr": 2.291, "atr": 3.0814285714284972, "ema20_distance_atr": -0.808}
