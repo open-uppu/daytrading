@@ -14,7 +14,7 @@ services:
       # firewall rules (see docs/DOCKER.md). Do not expose to the public internet.
       - "8000:8000"
     env_file:
-      - .env
+      - D:/workspace/open-uppu/trader/daytrad/.env
     environment:
       - MT5_HOST=0.0.0.0
       - MT5_PORT=8000
@@ -51,7 +51,7 @@ services:
       bridge:
         condition: service_healthy
     env_file:
-      - .env
+      - D:/workspace/open-uppu/trader/daytrad/.env
     environment:
       - MT5_HOST=bridge
       - MT5_PORT=8000
@@ -107,7 +107,7 @@ services:
       bridge:
         condition: service_healthy
     env_file:
-      - .env
+      - D:/workspace/open-uppu/trader/daytrad/.env
     environment:
       - MT5_HOST=bridge
       - MT5_PORT=8000
@@ -140,7 +140,7 @@ services:
     ports:
       - "8001:8000"
     env_file:
-      - .env
+      - D:/workspace/open-uppu/trader/daytrad/.env
     environment:
       - MT5_HOST=0.0.0.0
       - MT5_PORT=8000
@@ -170,7 +170,7 @@ services:
       bridge_demo:
         condition: service_healthy
     env_file:
-      - .env
+      - D:/workspace/open-uppu/trader/daytrad/.env
     environment:
       - MT5_HOST=bridge_demo
       - MT5_PORT=8000
