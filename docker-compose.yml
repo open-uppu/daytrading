@@ -19,13 +19,13 @@ services:
       - MT5_HOST=0.0.0.0
       - MT5_PORT=8000
     volumes:
-      - ./journal:/app/journal
-      - ./artifacts:/app/artifacts
-      - ./data:/app/data
-      - ./mt5:/app/mt5
-      - ./frontend:/app/frontend
-      - ./config.py:/app/config.py
-      - ./main.py:/app/main.py
+      - D:/workspace/open-uppu/trader/daytrad/journal:/app/journal
+      - D:/workspace/open-uppu/trader/daytrad/artifacts:/app/artifacts
+      - D:/workspace/open-uppu/trader/daytrad/data:/app/data
+      - D:/workspace/open-uppu/trader/daytrad/mt5:/app/mt5
+      - D:/workspace/open-uppu/trader/daytrad/frontend:/app/frontend
+      - D:/workspace/open-uppu/trader/daytrad/config.py:/app/config.py
+      - D:/workspace/open-uppu/trader/daytrad/main.py:/app/main.py
     command: ["python3", "main.py", "bridge"]
     healthcheck:
       # Confirms uvicorn actually bound and the app is answering, so `squad`
@@ -57,20 +57,20 @@ services:
       - MT5_PORT=8000
       - BROKER_MODE=mt5
     volumes:
-      - ./journal:/app/journal
-      - ./artifacts:/app/artifacts
-      - ./data:/app/data
-      - ./agents:/app/agents
-      - ./core:/app/core
-      - ./mt5:/app/mt5
-      - ./mt4:/app/mt4
-      - ./frontend:/app/frontend
-      - ./risk:/app/risk
-      - ./learning:/app/learning
-      - ./backtest:/app/backtest
-      - ./main.py:/app/main.py
-      - ./test_order.py:/app/test_order.py
-      - ./config.py:/app/config.py
+      - D:/workspace/open-uppu/trader/daytrad/journal:/app/journal
+      - D:/workspace/open-uppu/trader/daytrad/artifacts:/app/artifacts
+      - D:/workspace/open-uppu/trader/daytrad/data:/app/data
+      - D:/workspace/open-uppu/trader/daytrad/agents:/app/agents
+      - D:/workspace/open-uppu/trader/daytrad/core:/app/core
+      - D:/workspace/open-uppu/trader/daytrad/mt5:/app/mt5
+      - D:/workspace/open-uppu/trader/daytrad/mt4:/app/mt4
+      - D:/workspace/open-uppu/trader/daytrad/frontend:/app/frontend
+      - D:/workspace/open-uppu/trader/daytrad/risk:/app/risk
+      - D:/workspace/open-uppu/trader/daytrad/learning:/app/learning
+      - D:/workspace/open-uppu/trader/daytrad/backtest:/app/backtest
+      - D:/workspace/open-uppu/trader/daytrad/main.py:/app/main.py
+      - D:/workspace/open-uppu/trader/daytrad/test_order.py:/app/test_order.py
+      - D:/workspace/open-uppu/trader/daytrad/config.py:/app/config.py
     command: ["python3", "main.py", "run", "--agent=all9", "--mode=mt5", "--interval=15", "--wait-for-live-data", "--continuous", "--no-loss-cutoff"]
 
   # 3. Standalone Paper Trading (No MT5 needed, runs autonomous simulation)
@@ -89,9 +89,9 @@ services:
       - MT5_HOST=bridge
       - MT5_PORT=8000
     volumes:
-      - ./journal:/app/journal
-      - ./artifacts:/app/artifacts
-      - ./data:/app/data
+      - D:/workspace/open-uppu/trader/daytrad/journal:/app/journal
+      - D:/workspace/open-uppu/trader/daytrad/artifacts:/app/artifacts
+      - D:/workspace/open-uppu/trader/daytrad/data:/app/data
     command: ["python3", "main.py", "run", "--agent=all", "--mode=paper", "--paper-feed=bridge", "--interval=10", "--wait-for-live-data"]
 
   # 6. Dev shell — analysis/tests/backtests against the live bridge, no auto-trading.
@@ -113,22 +113,22 @@ services:
       - MT5_PORT=8000
       - BROKER_MODE=paper
     volumes:
-      - ./journal:/app/journal
-      - ./artifacts:/app/artifacts
-      - ./data:/app/data
-      - ./agents:/app/agents
-      - ./core:/app/core
-      - ./mt5:/app/mt5
-      - ./mt4:/app/mt4
-      - ./frontend:/app/frontend
-      - ./risk:/app/risk
-      - ./learning:/app/learning
-      - ./backtest:/app/backtest
-      - ./scripts:/app/scripts
-      - ./tests:/app/tests
-      - ./main.py:/app/main.py
-      - ./test_order.py:/app/test_order.py
-      - ./config.py:/app/config.py
+      - D:/workspace/open-uppu/trader/daytrad/journal:/app/journal
+      - D:/workspace/open-uppu/trader/daytrad/artifacts:/app/artifacts
+      - D:/workspace/open-uppu/trader/daytrad/data:/app/data
+      - D:/workspace/open-uppu/trader/daytrad/agents:/app/agents
+      - D:/workspace/open-uppu/trader/daytrad/core:/app/core
+      - D:/workspace/open-uppu/trader/daytrad/mt5:/app/mt5
+      - D:/workspace/open-uppu/trader/daytrad/mt4:/app/mt4
+      - D:/workspace/open-uppu/trader/daytrad/frontend:/app/frontend
+      - D:/workspace/open-uppu/trader/daytrad/risk:/app/risk
+      - D:/workspace/open-uppu/trader/daytrad/learning:/app/learning
+      - D:/workspace/open-uppu/trader/daytrad/backtest:/app/backtest
+      - D:/workspace/open-uppu/trader/daytrad/scripts:/app/scripts
+      - D:/workspace/open-uppu/trader/daytrad/tests:/app/tests
+      - D:/workspace/open-uppu/trader/daytrad/main.py:/app/main.py
+      - D:/workspace/open-uppu/trader/daytrad/test_order.py:/app/test_order.py
+      - D:/workspace/open-uppu/trader/daytrad/config.py:/app/config.py
     command: ["sleep", "infinity"]
 
   # 4. Multi-Account: Secondary Account Bridge (e.g. Demo Standard on port 8001)
@@ -145,13 +145,13 @@ services:
       - MT5_HOST=0.0.0.0
       - MT5_PORT=8000
     volumes:
-      - ./journal_demo:/app/journal
-      - ./artifacts_demo:/app/artifacts
-      - ./data:/app/data
-      - ./mt5:/app/mt5
-      - ./frontend:/app/frontend
-      - ./config.py:/app/config.py
-      - ./main.py:/app/main.py
+      - D:/workspace/open-uppu/trader/daytrad/journal_demo:/app/journal
+      - D:/workspace/open-uppu/trader/daytrad/artifacts_demo:/app/artifacts
+      - D:/workspace/open-uppu/trader/daytrad/data:/app/data
+      - D:/workspace/open-uppu/trader/daytrad/mt5:/app/mt5
+      - D:/workspace/open-uppu/trader/daytrad/frontend:/app/frontend
+      - D:/workspace/open-uppu/trader/daytrad/config.py:/app/config.py
+      - D:/workspace/open-uppu/trader/daytrad/main.py:/app/main.py
     command: ["python3", "main.py", "bridge"]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/mt5/status"]
@@ -176,18 +176,18 @@ services:
       - MT5_PORT=8000
       - BROKER_MODE=mt5
     volumes:
-      - ./journal_demo:/app/journal
-      - ./artifacts_demo:/app/artifacts
-      - ./data:/app/data
-      - ./agents:/app/agents
-      - ./core:/app/core
-      - ./mt5:/app/mt5
-      - ./mt4:/app/mt4
-      - ./frontend:/app/frontend
-      - ./risk:/app/risk
-      - ./learning:/app/learning
-      - ./backtest:/app/backtest
-      - ./main.py:/app/main.py
-      - ./test_order.py:/app/test_order.py
-      - ./config.py:/app/config.py
+      - D:/workspace/open-uppu/trader/daytrad/journal_demo:/app/journal
+      - D:/workspace/open-uppu/trader/daytrad/artifacts_demo:/app/artifacts
+      - D:/workspace/open-uppu/trader/daytrad/data:/app/data
+      - D:/workspace/open-uppu/trader/daytrad/agents:/app/agents
+      - D:/workspace/open-uppu/trader/daytrad/core:/app/core
+      - D:/workspace/open-uppu/trader/daytrad/mt5:/app/mt5
+      - D:/workspace/open-uppu/trader/daytrad/mt4:/app/mt4
+      - D:/workspace/open-uppu/trader/daytrad/frontend:/app/frontend
+      - D:/workspace/open-uppu/trader/daytrad/risk:/app/risk
+      - D:/workspace/open-uppu/trader/daytrad/learning:/app/learning
+      - D:/workspace/open-uppu/trader/daytrad/backtest:/app/backtest
+      - D:/workspace/open-uppu/trader/daytrad/main.py:/app/main.py
+      - D:/workspace/open-uppu/trader/daytrad/test_order.py:/app/test_order.py
+      - D:/workspace/open-uppu/trader/daytrad/config.py:/app/config.py
     command: ["python3", "main.py", "run", "--agent=all9", "--mode=mt5", "--interval=15", "--wait-for-live-data", "--journal-dir=journal_demo/"]
