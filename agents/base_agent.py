@@ -258,9 +258,11 @@ class BaseSpecialistAgent(ABC):
                     exit_reason=resolved_exit,
                     confluence_score=75.0,
                     pattern_detected=self.strategy_name,
-                    ema_200=t.get("open_price", 0.0),
+                    # Real values logged at entry when available; the old
+                    # placeholders (entry price / 50) hid every EMA200 mistake.
+                    ema_200=float(entry_ctx.get("ema_200") or entry_ctx.get("htf_ema_200") or t.get("open_price", 0.0)),
                     atr=float(entry_ctx.get("atr", self.min_sl_dist)),
-                    rsi=50.0,
+                    rsi=float(entry_ctx.get("rsi") if entry_ctx.get("rsi") is not None else 50.0),
                     entry_reason=entry_ctx.get("reason") or None,
                     news_reason=entry_ctx.get("news_reason") or None,
                     spread=entry_ctx.get("spread"),
@@ -560,6 +562,9 @@ class BaseSpecialistAgent(ABC):
         news_reason: str,
         atr: float,
         ema_20: float,
+        ema_200: Optional[float] = None,
+        htf_ema_200: Optional[float] = None,
+        rsi: Optional[float] = None,
     ) -> None:
         meta = self._last_entry_meta or {}
         record = {
@@ -578,6 +583,11 @@ class BaseSpecialistAgent(ABC):
             "atr": atr,
             "ema20_distance_atr": round((entry - ema_20) / atr, 3) if atr else None,
         }
+        # Real indicator context for the post-trade autopsy (it used to stamp
+        # ema_200=entry price and rsi=50 on every trade). Only real values are logged.
+        for key, value in (("ema_200", ema_200), ("htf_ema_200", htf_ema_200), ("rsi", rsi)):
+            if value is not None:
+                record[key] = round(float(value), 4)
         if ticket is not None:
             self._entry_context[int(ticket)] = record
         try:
@@ -787,6 +797,11 @@ class BaseSpecialistAgent(ABC):
 
         # 7. Evaluate Strategy Signal
         signal = self.evaluate_strategy_signal(df_main, risk_band)
+        # Per-specialist entry pause (e.g. ETH: no validated edge, qualabinance
+        # 2026-11-21). Blocks BOTH strategy and cadence-pacer entries; open
+        # position management above is unaffected.
+        if not getattr(self, "entries_enabled", True):
+            signal = {"action": "HOLD", "reason": "ENTRIES_PAUSED: no validated edge (see improvement_backlog.md)"}
         self.last_signal = signal
         action = signal.get("action", "HOLD")
         reason = signal.get("reason", "Waiting for setup confirmation")
@@ -800,6 +815,8 @@ class BaseSpecialistAgent(ABC):
             # Cadence Pacer: Guarantee at least 1 order every 10 minutes (600s) on active market
             can_pacer = (
                 getattr(config, "cadence_pacer_enabled", True)
+                and getattr(self, "entries_enabled", True)
+                and getattr(self, "pacer_enabled", True)
                 and len(symbol_positions) < self.max_open_positions
             )
             elapsed = (datetime.now() - self.last_entry_time).total_seconds() if self.last_entry_time else 999999
@@ -1046,6 +1063,9 @@ class BaseSpecialistAgent(ABC):
             news_reason=news_status.get("reason", ""),
             atr=atr,
             ema_20=ema_20,
+            ema_200=ema_200 if ema_200_valid else None,
+            htf_ema_200=htf_ema_200 if htf_ema_200_valid else None,
+            rsi=rsi,
         )
         logger.info(
             f"[3. สั่งซื้อจริง / REAL-ORDER-FILLED] {self.symbol} โบรกเกอร์ยืนยันคำสั่งสำเร็จ! "

@@ -56,7 +56,7 @@ def test_btc_specialist_agent_spec(temp_journal_dir):
     assert agent.asset_name == "Bitcoin"
     assert agent.contract_size == 1.0
     assert agent.min_sl_dist == 50.0
-    assert agent.strategy_name == "EMA_Pullback_Rejection_A"
+    assert agent.strategy_name == "MTF_Momentum_Cross_D"
     assert agent.strategy_type == "trend"
 
 

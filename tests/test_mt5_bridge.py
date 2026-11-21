@@ -317,7 +317,8 @@ def test_single_specialist_smoke_cycle_reaches_ea_confirmation():
         "balance": 10000.0, "equity": 10000.0, "symbol": "XAUUSD",
         "bid": 2650.0, "ask": 2650.25, "open_positions": [], "closed_orders": [],
     })
-    bars = [{"timestamp": i, "open": 2650.0, "high": 2651.0,
+    # upper wick < 50% so the rejection-wick gate does not block the BUY
+    bars = [{"timestamp": i, "open": 2650.0, "high": 2650.4,
              "low": 2649.0, "close": 2650.0, "volume": 100} for i in range(60)]
     assert client.post("/api/mt5/bars", json={
         "symbol": "XAUUSD", "timeframe": "M15", "bars": bars,

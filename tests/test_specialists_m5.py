@@ -42,6 +42,10 @@ def test_specialists_evaluate_m5_signal():
     assert sig["action"] in ["BUY", "SELL", "HOLD"]
 
 def test_squad_manager_timeframe_propagation():
+    from agents.squad_manager import SPECIALIST_REGISTRY
+    forced = {k: tf for k, (_, _, tf) in SPECIALIST_REGISTRY.items() if tf}
     squad = SquadManager(timeframe="M5", broker_mode="paper")
-    for agent in squad.specialists.values():
-        assert agent.timeframe == "M5"
+    for key, agent in squad.specialists.items():
+        # forced-M15 specialists (xag/gbp/eur/xpt/btc) keep their validated
+        # timeframe; everyone else follows the squad's own timeframe
+        assert agent.timeframe == forced.get(key, "M5")

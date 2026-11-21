@@ -81,7 +81,7 @@ def test_mtf_macro_trend_filter():
         mock_m5 = pd.DataFrame({
             "timestamp": pd.date_range("2026-08-01 10:00", periods=n, freq="5min"),
             "open": [2500.0] * n,
-            "high": [2505.0] * n,
+            "high": [2501.0] * n,
             "low": [2495.0] * n,
             "close": [2500.0] * n,
             "volume": [100] * n
@@ -134,6 +134,9 @@ def test_cadence_pacer_periodic_entry():
         )
         # Force evaluate_strategy_signal to return HOLD
         agent.evaluate_strategy_signal = lambda df, risk_band="NORMAL": {"action": "HOLD"}
+        # This test targets the pacer MECHANISM; BTC's production policy now
+        # disables its pacer (validated negative edge), so re-enable it here.
+        agent.pacer_enabled = True
         # Isolate the cadence rule from the concurrency cap (default is now 1).
         agent.max_open_positions = 3
         
@@ -143,8 +146,8 @@ def test_cadence_pacer_periodic_entry():
         mock_df = pd.DataFrame({
             "timestamp": pd.date_range("2026-08-01 10:00", periods=n, freq="5min"),
             "open": prices,
-            "high": [p + 5 for p in prices],
-            "low": [p - 5 for p in prices],
+            "high": [p + 0.5 for p in prices],
+            "low": [p - 0.5 for p in prices],
             "close": prices,
             "volume": [100] * n
         })

@@ -48,7 +48,10 @@ console = Console()
 # make every one of them raise NotImplementedError on its first step().
 SPECIALIST_REGISTRY: Dict[str, Tuple[Type[BaseSpecialistAgent], str, Optional[str]]] = {
     "gold": (GoldSpecialistAgent, "xauusd", None),
-    "btc": (BtcSpecialistAgent, "btcusd", None),
+    # 2026-11-21: BTC forced to M15 Strategy D — the only crypto variant with
+    # positive expectancy in all 4 walk-forward folds of the qualabinance
+    # rigorous validation (M5 scalper: -0.126R over 865 trades).
+    "btc": (BtcSpecialistAgent, "btcusd", "M15"),
     "eth": (EthSpecialistAgent, "ethusd", None),
     "xag": (SilverSpecialistAgent, "xagusd", "M15"),
     "gbp": (GbpSpecialistAgent, "gbpusd", "M15"),

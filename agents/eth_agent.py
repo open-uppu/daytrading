@@ -11,6 +11,7 @@ import logging
 
 from agents.base_agent import BaseSpecialistAgent
 from backtest.strategies import strategy_bb_reversion, strategy_m5_scalper
+from config import config
 from mt4.broker_interface import BaseBroker
 
 logger = logging.getLogger("eth_agent")
@@ -54,6 +55,11 @@ class EthSpecialistAgent(BaseSpecialistAgent):
             min_entry_interval_sec=min_entry_interval_sec,
             magic=magic
         )
+        # 2026-11-21: new entries paused by default — rigorous validation found
+        # no positive-edge ETH variant (M5 scalper -0.240R; M15 C ~0 and
+        # fold-unstable). Open positions keep SL/TP management. Re-enable with
+        # env ETH_ENTRIES_ENABLED=true once a strategy passes validation.
+        self.entries_enabled = config.eth_entries_enabled
 
     @property
     def strategy_name(self) -> str:

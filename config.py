@@ -40,6 +40,12 @@ class TradingConfig(BaseSettings):
     trailing_be_trigger_r: float = 0.6 # Lock breakeven at +0.6R: at 1.0R winners that reached ~0.7-0.8R gave it all back to a full SL (16-trade live sample, 2026-09-21)
     ml_filter_enabled: bool = True   # Enable ML Meta-Labeling confidence filter
     ml_confidence_threshold: float = 0.70 # Confidence threshold (0.70 - 0.85)
+    # 2026-11-21 qualabinance rigorous validation (demo): ETH M5 scalper
+    # expectancy -0.240R (1,056 trades, PF 0.70) and every M15 alternative was
+    # ~0 or fold-unstable. New ETH entries are paused until a strategy passes
+    # validation; open positions keep their SL/TP management. Flip via env
+    # ETH_ENTRIES_ENABLED=true to re-enable without a code change.
+    eth_entries_enabled: bool = False
     cadence_pacer_enabled: bool = True # Ensures orders every 5-10 minutes per active asset
     min_entry_interval_sec: int = 300  # 5-minute cadence interval (300 seconds = 1 M5 bar)
     
