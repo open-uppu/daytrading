@@ -14,3 +14,4 @@ journal/daily_baseline.json
 
 # runtime: ForexFactory economic-calendar cache written per specialist
 journal/*/ff_calendar_cache.json
+.DS_Store
